@@ -9,6 +9,7 @@ use crate::ir::{
     globalxxx::{FunctionPtr, GlobalVariablePtr},
     ir_type::{Type, TypePtr},
     ir_value::{BasicBlockPtr, Constant, ConstantPtr, InstructionPtr, Value, ValuePtr},
+    layout::TargetDataLayout,
 };
 
 const IR_INDENT_NUM: usize = 4;
@@ -26,6 +27,8 @@ struct PrintHelper {
     indent: usize,
     value_with_type: bool,
     no_struct_type_alias: bool,
+
+    top_level_strings: String,
 }
 
 impl PrintHelper {
@@ -68,6 +71,11 @@ impl PrintHelper {
         self.result += s;
         self.result += "\n";
         self.result += " ".repeat(self.indent * IR_INDENT_NUM).as_str();
+    }
+
+    fn append_top_levelln(&mut self, s: &str) {
+        self.top_level_strings += s;
+        self.top_level_strings += "\n";
     }
 
     fn clear_local_name_space(&mut self) {
@@ -118,6 +126,10 @@ impl PrintHelper {
             name
         }
     }
+
+    fn get_result(self) -> String {
+        self.top_level_strings + "\n" + &self.result
+    }
 }
 
 trait IRPrint {
@@ -130,12 +142,26 @@ impl LLVMModule {
         self.ir_print(&mut helper);
         let ctx = self.ctx_impl.borrow();
         helper.add_struct_defination(&ctx.named_strcut_ty);
-        helper.result
+        helper.get_result()
+    }
+}
+
+impl IRPrint for TargetDataLayout {
+    fn ir_print(&self, helper: &mut PrintHelper) {
+        helper.append_top_levelln(&format!(
+            "target datalayout = \"{}\"",
+            self.llvm_data_layout()
+        ));
     }
 }
 
 impl IRPrint for LLVMModule {
     fn ir_print(&self, helper: &mut PrintHelper) {
+        let ctx = self.ctx_impl.borrow();
+        let layout = &ctx.type_layout_engine.target();
+        layout.ir_print(helper);
+        drop(ctx);
+
         self.global_variables.iter().for_each(|(_, v)| {
             v.ir_print(helper);
             helper.appendln("");

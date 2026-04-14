@@ -15,6 +15,7 @@ use crate::{
         attribute::Attribute,
         ir_type::TypePtr,
         ir_value::{ConstantPtr, InstructionPtr},
+        layout::TargetDataLayout,
     },
     irgen::value::ValuePtrContainer,
     semantics::{
@@ -38,8 +39,8 @@ pub struct IRGenerator<'ast, 'analyzer> {
 }
 
 impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
-    pub fn new(analyzer: &'analyzer SemanticAnalyzer<'ast>) -> Self {
-        let mut context = LLVMContext::default();
+    pub fn new(analyzer: &'analyzer SemanticAnalyzer<'ast>, target: TargetDataLayout) -> Self {
+        let mut context = LLVMContext::new(target);
         let mut builder = context.create_builder();
         let alloca_builder = context.create_builder();
         let mut module = context.create_module("crate");

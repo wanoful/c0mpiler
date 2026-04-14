@@ -99,6 +99,17 @@ impl TargetDataLayout {
     pub const fn rv32() -> Self {
         Self::new(4, 4)
     }
+
+    pub const fn x86_64() -> Self {
+        Self::new(8, 8)
+    }
+
+    pub fn llvm_data_layout(&self) -> String {
+        let ptr_size_bits = self.pointer_size * 8;
+        let ptr_align_bits = self.pointer_align * 8;
+
+        format!("e-m:e-p:{ptr_size_bits}:{ptr_align_bits}-i8:8-i16:16-i32:32-i64:64-n32-S128")
+    }
 }
 
 impl Default for TargetDataLayout {

@@ -2,6 +2,7 @@ use std::io::{Read, stdin};
 
 use c0mpiler::{
     ast::{Crate, Eatable},
+    ir::layout::TargetDataLayout,
     irgen::IRGenerator,
     lexer::{Lexer, TokenBuffer},
     semantics::analyzer::SemanticAnalyzer,
@@ -21,7 +22,7 @@ fn main() {
     let (analyzer, semantic_result) = SemanticAnalyzer::visit(&krate);
     semantic_result.unwrap();
 
-    let mut ir_gen = IRGenerator::new(&analyzer);
+    let mut ir_gen = IRGenerator::new(&analyzer, TargetDataLayout::rv32());
     ir_gen.visit(&krate);
     let ir = ir_gen.print();
 

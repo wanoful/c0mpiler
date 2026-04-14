@@ -27,6 +27,7 @@ use crate::ir::{
         ConstantString, ConstantStringPtr, ConstantStruct, ConstantStructPtr, GlobalObjectPtr,
         ICmpCode, Instruction, InstructionPtr, Value, ValueBase, ValuePtr,
     },
+    layout::{TargetDataLayout, TypeLayoutEngine},
 };
 
 #[derive(Debug)]
@@ -92,6 +93,12 @@ pub struct LLVMContext {
 }
 
 impl LLVMContext {
+    pub fn new(target: TargetDataLayout) -> Self {
+        Self {
+            ctx_impl: Rc::new(RefCell::new(LLVMContextImpl::new(target))),
+        }
+    }
+
     pub fn create_builder(&self) -> LLVMBuilder {
         LLVMBuilder {
             ctx_impl: self.ctx_impl.clone(),
@@ -213,6 +220,8 @@ pub struct LLVMContextImpl {
     ty_pool: ContextTypePool,
     named_strcut_ty: HashMap<String, TypePtr>,
 
+    type_layout_engine: TypeLayoutEngine,
+
     // 常量才会被缓存，指向唯一地址
     // 所以常量从 context 获取，其余从 builder 获取
     integer_pool: HashMap<(u8, u32), ConstantIntPtr>, // (位数, 大小)
@@ -223,6 +232,13 @@ pub struct LLVMContextImpl {
 }
 
 impl LLVMContextImpl {
+    pub fn new(target: TargetDataLayout) -> Self {
+        Self {
+            type_layout_engine: TypeLayoutEngine::new(target),
+            ..Default::default()
+        }
+    }
+
     fn int_type(&mut self, bit_width: u8) -> IntTypePtr {
         IntTypePtr(self.ty_pool.int_type(bit_width))
     }
@@ -797,16 +813,11 @@ impl LLVMBuilder {
         ))
     }
 
-    // TODO: 完成 typelayout, 这个也太抽象了🫡
-    pub fn build_get_size(&self, ty: TypePtr) -> ValuePtr {
+    pub fn build_get_size(&self, ty: TypePtr) -> ConstantIntPtr {
         let mut ctx = self.ctx_impl.borrow_mut();
-        let value: ConstantPtr = ctx.get_null().into();
-        let one = ctx.get_i32(1);
-        let i32_type = ctx.i32_type();
-        drop(ctx);
-        let p = self.build_getelementptr(ty, value.into(), vec![one.into()], None);
-        self.build_ptr_to_int(p.into(), i32_type, Some("size"))
-            .into()
+        let type_layout = ctx.type_layout_engine.layout_of(&ty).unwrap();
+        let size = type_layout.layout.size;
+        ctx.get_i32(size)
     }
 
     pub fn build_memcpy(
@@ -867,7 +878,7 @@ impl LLVMBuilder {
             vec![
                 dest,
                 src,
-                size,
+                size.into(),
                 self.ctx_impl.borrow_mut().get_i1(false).into(),
             ],
             None,

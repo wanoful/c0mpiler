@@ -1,5 +1,5 @@
 use std::{
-    fs,
+    fs, mem,
     panic::{self, AssertUnwindSafe},
     path::PathBuf,
     process::{Command, Stdio},
@@ -8,6 +8,7 @@ use std::{
 
 use c0mpiler::{
     ast::{Crate, Eatable},
+    ir::layout::TargetDataLayout,
     irgen::IRGenerator,
     lexer::{Lexer, TokenBuffer},
     semantics::analyzer::SemanticAnalyzer,
@@ -159,7 +160,14 @@ fn run_test_cases(
 
         // Generate IR
         let ir = match panic::catch_unwind(AssertUnwindSafe(|| {
-            let mut generator = IRGenerator::new(&analyzer);
+            const PTR_SIZE: u32 = mem::size_of::<usize>() as u32;
+            let mut generator = IRGenerator::new(
+                &analyzer,
+                TargetDataLayout {
+                    pointer_size: PTR_SIZE,
+                    pointer_align: PTR_SIZE,
+                },
+            );
             generator.visit(&krate);
             generator.print()
         })) {
@@ -386,7 +394,7 @@ fn run_test_cases_with_reimu(
 
         // Generate IR
         let ir = match panic::catch_unwind(AssertUnwindSafe(|| {
-            let mut generator = IRGenerator::new(&analyzer);
+            let mut generator = IRGenerator::new(&analyzer, TargetDataLayout::rv32());
             generator.visit(&krate);
             generator.print()
         })) {
