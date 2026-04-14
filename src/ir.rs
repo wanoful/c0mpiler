@@ -4,6 +4,7 @@ pub mod globalxxx;
 pub mod ir_output;
 pub mod ir_type;
 pub mod ir_value;
+pub mod layout;
 
 use std::{
     cell::RefCell,
