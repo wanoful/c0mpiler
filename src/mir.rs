@@ -21,9 +21,16 @@ pub trait TargetInst {
     fn is_terminator(&self) -> bool;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BlockId(pub usize);
+
 pub struct MachineBlock<T: TargetArch> {
+    pub id: BlockId,
     pub name: String,
     pub instructions: Vec<T::MachineInst>,
+
+    pub predecessors: Vec<BlockId>,
+    pub successors: Vec<BlockId>,
 }
 
 pub struct MachineFunction<T: TargetArch> {
