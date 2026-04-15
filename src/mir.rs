@@ -38,3 +38,36 @@ pub struct MachineFunction<T: TargetArch> {
     pub blocks: Vec<MachineBlock<T>>,
     pub next_vreg_id: usize,
 }
+
+pub enum Linkage {
+    External,
+    Internal,
+}
+
+pub enum MachineSymbolKind<T: TargetArch> {
+    Function(MachineFunction<T>),
+    ExternalPlaceholder,
+    Data(Vec<u8>),
+    Bss { size: usize },
+}
+
+pub enum MachineSegment {
+    Text,
+    Data,
+    ReadOnlyData,
+    Bss,
+}
+
+pub struct MachineSymbol<T: TargetArch> {
+    pub name: String,
+    pub kind: MachineSymbolKind<T>,
+    pub segment: MachineSegment,
+
+    pub linkage: Linkage,
+    pub alignment: usize,
+}
+
+#[derive(Default)]
+pub struct MachineModule<T: TargetArch> {
+    pub symbols: Vec<MachineSymbol<T>>,
+}
