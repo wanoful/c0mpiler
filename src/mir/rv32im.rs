@@ -1,4 +1,12 @@
-use crate::mir::{Register, TargetInst};
+use crate::mir::{BlockId, Register, SymbolId, TargetArch, TargetInst};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RV32Arch;
+
+impl TargetArch for RV32Arch {
+    type PhysicalReg = RV32Reg;
+    type MachineInst = RV32Inst;
+}
 
 #[rustfmt::skip]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -47,14 +55,14 @@ pub enum RV32Inst {
     Sh { rs1: Reg, rs2: Reg, imm: i32 },
     Sw { rs1: Reg, rs2: Reg, imm: i32 },
 
-    Beq { rs1: Reg, rs2: Reg, label: String },
-    Bne { rs1: Reg, rs2: Reg, label: String },
-    Blt { rs1: Reg, rs2: Reg, label: String },
-    Bge { rs1: Reg, rs2: Reg, label: String },
-    Bltu { rs1: Reg, rs2: Reg, label: String },
-    Bgeu { rs1: Reg, rs2: Reg, label: String },
+    Beq { rs1: Reg, rs2: Reg, label: BlockId },
+    Bne { rs1: Reg, rs2: Reg, label: BlockId },
+    Blt { rs1: Reg, rs2: Reg, label: BlockId },
+    Bge { rs1: Reg, rs2: Reg, label: BlockId },
+    Bltu { rs1: Reg, rs2: Reg, label: BlockId },
+    Bgeu { rs1: Reg, rs2: Reg, label: BlockId },
 
-    Jal { rd: Reg, label: String },
+    Jal { rd: Reg, label: BlockId },
     Jalr { rd: Reg, rs1: Reg, imm: i32 },
 
     Lui { rd: Reg, imm: i32 },
@@ -78,33 +86,33 @@ pub enum RV32Inst {
     Snez { rd: Reg, rs: Reg },
     Sgtz { rd: Reg, rs: Reg },
     Sltz { rd: Reg, rs: Reg },
-    Bgez { rs: Reg, label: String },
-    Blez { rs: Reg, label: String },
-    Bgtz { rs: Reg, label: String },
-    Bltz { rs: Reg, label: String },
-    Bnez { rs: Reg, label: String },
-    Beqz { rs: Reg, label: String },
-    Bgt { rs1: Reg, rs2: Reg, label: String },
-    Ble { rs1: Reg, rs2: Reg, label: String },
-    Bgtu { rs1: Reg, rs2: Reg, label: String },
-    Bleu { rs1: Reg, rs2: Reg, label: String },
+    Bgez { rs: Reg, label: BlockId },
+    Blez { rs: Reg, label: BlockId },
+    Bgtz { rs: Reg, label: BlockId },
+    Bltz { rs: Reg, label: BlockId },
+    Bnez { rs: Reg, label: BlockId },
+    Beqz { rs: Reg, label: BlockId },
+    Bgt { rs1: Reg, rs2: Reg, label: BlockId },
+    Ble { rs1: Reg, rs2: Reg, label: BlockId },
+    Bgtu { rs1: Reg, rs2: Reg, label: BlockId },
+    Bleu { rs1: Reg, rs2: Reg, label: BlockId },
 
-    J { label: String },
-    Jal1 { label: String },
+    J { label: BlockId },
+    Jal1 { label: BlockId },
     Jr { rs: Reg },
     Jalr1 { rs: Reg },
     Ret,
-    La { rd: Reg, label: String },
+    La { rd: Reg, label: SymbolId },
     Nop,
-    Lbs { rd: Reg, symbol: String },
-    Lhs { rd: Reg, symbol: String },
-    Lws { rd: Reg, symbol: String },
-    Sbs { rs: Reg, symbol: String },
-    Shs { rs: Reg, symbol: String },
-    Sws { rs: Reg, symbol: String },
+    Lbs { rd: Reg, symbol: SymbolId },
+    Lhs { rd: Reg, symbol: SymbolId },
+    Lws { rd: Reg, symbol: SymbolId },
+    Sbs { rs: Reg, symbol: SymbolId },
+    Shs { rs: Reg, symbol: SymbolId },
+    Sws { rs: Reg, symbol: SymbolId },
 
-    Call { func: String, num_args: usize },
-    Tail { func: String, num_args: usize },
+    Call { func: SymbolId, num_args: usize, stack_arg_size: usize },
+    Tail { func: SymbolId, num_args: usize, stack_arg_size: usize },
 }
 
 impl TargetInst for RV32Inst {
@@ -162,8 +170,9 @@ impl TargetInst for RV32Inst {
             | Lhs { rd, .. }
             | Lws { rd, .. } => vec![*rd],
             Jal1 { .. } | Jalr1 { .. } => vec![Register::Physical(RV32Reg::Ra)],
-            Call { .. } | Tail { .. } => {
-                let mut reg = vec![
+            Call { .. } => {
+                vec![
+                    Register::Physical(RV32Reg::Ra),
                     Register::Physical(RV32Reg::A0),
                     Register::Physical(RV32Reg::A1),
                     Register::Physical(RV32Reg::A2),
@@ -179,12 +188,9 @@ impl TargetInst for RV32Inst {
                     Register::Physical(RV32Reg::T4),
                     Register::Physical(RV32Reg::T5),
                     Register::Physical(RV32Reg::T6),
-                ];
-                if matches!(self, Call { .. }) {
-                    reg.push(Register::Physical(RV32Reg::Ra));
-                };
-                reg
+                ]
             }
+            Tail { .. } => vec![],
             _ => vec![],
         }
     }
@@ -252,7 +258,11 @@ impl TargetInst for RV32Inst {
             | Bleu { rs1, rs2, .. } => vec![*rs1, *rs2],
             Jr { rs } => vec![*rs],
             Jalr1 { rs } => vec![*rs],
-            Ret => vec![Register::Physical(RV32Reg::Ra)],
+            Ret => vec![
+                Register::Physical(RV32Reg::Ra),
+                Register::Physical(RV32Reg::A0),
+                Register::Physical(RV32Reg::A1),
+            ],
             Sbs { rs, .. } | Shs { rs, .. } | Sws { rs, .. } => vec![*rs],
             Call { num_args, .. } | Tail { num_args, .. } => [
                 RV32Reg::A0,
