@@ -1,4 +1,5 @@
 pub mod rv32im;
+pub mod lower;
 
 use std::{collections::HashMap, fmt::Debug, hash::Hash};
 
@@ -135,10 +136,18 @@ pub struct MachineSymbol<T: TargetArch> {
     pub alignment: usize,
 }
 
-#[derive(Default)]
 pub struct MachineModule<T: TargetArch> {
     pub symbols: Vec<MachineSymbol<T>>,
     pub symbol_map: HashMap<String, SymbolId>,
+}
+
+impl<T: TargetArch> Default for MachineModule<T> {
+    fn default() -> Self {
+        Self {
+            symbols: Vec::new(),
+            symbol_map: HashMap::new(),
+        }
+    }
 }
 
 impl<T: TargetArch> MachineModule<T> {

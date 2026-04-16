@@ -1035,6 +1035,22 @@ impl LLVMModule {
     pub fn get_global_variable(&mut self, name: &str) -> Option<GlobalVariablePtr> {
         self.global_variables.get(name).cloned()
     }
+
+    pub fn functions_in_order(&self) -> Vec<FunctionPtr> {
+        let mut functions = self.functions.values().cloned().collect::<Vec<_>>();
+        functions.sort_by_key(|(_, order)| *order);
+        functions.into_iter().map(|(func, _)| func).collect()
+    }
+
+    pub fn global_variables(&self) -> Vec<GlobalVariablePtr> {
+        let mut globals = self
+            .global_variables
+            .iter()
+            .map(|(name, var)| (name.clone(), var.clone()))
+            .collect::<Vec<_>>();
+        globals.sort_by(|(lhs, _), (rhs, _)| lhs.cmp(rhs));
+        globals.into_iter().map(|(_, var)| var).collect()
+    }
 }
 
 #[test]
