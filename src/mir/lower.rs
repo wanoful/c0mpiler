@@ -10,7 +10,11 @@ use crate::{
     ir::{
         LLVMModule,
         globalxxx::{FunctionPtr, GlobalVariablePtr},
-        ir_value::{BasicBlockPtr, InstructionPtr, Value},
+        ir_value::{
+            BasicBlockPtr, Constant, ConstantArray, ConstantInt, ConstantPtr, ConstantString,
+            ConstantStruct, InstructionPtr, Value,
+        },
+        layout::TypeLayout,
     },
     mir::{
         BlockId, FrameInfo, FrameLayout, Linkage, MachineBlock, MachineFunction, MachineModule,
@@ -28,11 +32,19 @@ pub struct LowerOptions {
 pub enum LowerError {
     DuplicateSymbol(String),
     MissingFunctionName,
-    MissingEntryBlock { function: String },
+    MissingEntryBlock {
+        function: String,
+    },
     UnknownFunctionSymbol(String),
-    UnknownBlock { function: String, block_name: Option<String> },
+    UnknownBlock {
+        function: String,
+        block_name: Option<String>,
+    },
     UnimplementedGlobal(String),
-    UnimplementedInstruction { function: String, opcode: String },
+    UnimplementedInstruction {
+        function: String,
+        opcode: String,
+    },
 }
 
 impl Display for LowerError {
@@ -44,7 +56,10 @@ impl Display for LowerError {
                 write!(f, "function `{function}` does not contain an entry block")
             }
             LowerError::UnknownFunctionSymbol(name) => {
-                write!(f, "function symbol `{name}` was not registered before lowering")
+                write!(
+                    f,
+                    "function symbol `{name}` was not registered before lowering"
+                )
             }
             LowerError::UnknownBlock {
                 function,
@@ -56,7 +71,10 @@ impl Display for LowerError {
                 None => write!(f, "unknown unnamed block in function `{function}`"),
             },
             LowerError::UnimplementedGlobal(name) => {
-                write!(f, "global lowering for `{name}` has not been implemented yet")
+                write!(
+                    f,
+                    "global lowering for `{name}` has not been implemented yet"
+                )
             }
             LowerError::UnimplementedInstruction { function, opcode } => write!(
                 f,
@@ -158,9 +176,7 @@ impl RV32Lowerer {
         }
 
         for function in module.functions_in_order() {
-            let name = function
-                .get_name()
-                .ok_or(LowerError::MissingFunctionName)?;
+            let name = function.get_name().ok_or(LowerError::MissingFunctionName)?;
             self.ensure_symbol_absent(machine_module, &name)?;
 
             let is_external = function.as_function().blocks.borrow().is_empty();
@@ -195,7 +211,7 @@ impl RV32Lowerer {
                 .expect("global variables should always have symbol names");
             let symbol_id = state.global_symbols[&name];
             let symbol = &mut machine_module.symbols[symbol_id.0];
-            symbol.kind = self.lower_global(&global)?;
+            symbol.kind = self.lower_global(module, &global)?;
         }
 
         Ok(())
@@ -212,9 +228,7 @@ impl RV32Lowerer {
                 continue;
             }
 
-            let name = function
-                .get_name()
-                .ok_or(LowerError::MissingFunctionName)?;
+            let name = function.get_name().ok_or(LowerError::MissingFunctionName)?;
             let symbol_id = *state
                 .function_symbols
                 .get(&name)
@@ -228,21 +242,70 @@ impl RV32Lowerer {
 
     fn lower_global(
         &mut self,
+        module: &LLVMModule,
         global: &GlobalVariablePtr,
     ) -> Result<MachineSymbolKind<RV32Arch>, LowerError> {
-        let name = global
-            .get_name()
-            .expect("global variables should always have symbol names");
-        Err(LowerError::UnimplementedGlobal(name))
+        let initializer = global.as_global_variable().initializer.clone();
+
+        Ok(MachineSymbolKind::Data(
+            self.lower_constant(module, &initializer)?,
+        ))
+    }
+
+    fn lower_constant(
+        &self,
+        module: &LLVMModule,
+        constant: &ConstantPtr,
+    ) -> Result<Vec<u8>, LowerError> {
+        let ty = constant.get_type();
+        let type_layout = module.get_type_layout(ty).unwrap();
+
+        match constant.as_constant() {
+            Constant::ConstantInt(ConstantInt(number)) => {
+                let bytes = number.to_le_bytes();
+                Ok(bytes[..(type_layout.layout.size as usize)].to_vec())
+            }
+            Constant::ConstantArray(ConstantArray(inners)) => {
+                let array_layout = type_layout.shape.as_array().unwrap();
+                inners.iter().try_fold(vec![], |mut acc, inner| {
+                    let mut inner_bytes = self.lower_constant(module, inner)?;
+                    assert!(inner_bytes.len() <= array_layout.stride as usize);
+                    inner_bytes.resize(array_layout.stride as usize, 0);
+                    acc.append(&mut inner_bytes);
+                    Ok(acc)
+                })
+            }
+            Constant::ConstantStruct(ConstantStruct(fields)) => {
+                let struct_layout = type_layout.shape.as_struct().unwrap();
+                fields.iter().zip(struct_layout.fields.iter()).try_fold(
+                    vec![],
+                    |mut acc, (field, field_layout)| {
+                        assert!(field_layout.offset as usize >= acc.len());
+                        acc.resize(field_layout.offset as usize, 0);
+                        let mut field_bytes = self.lower_constant(module, field)?;
+                        acc.append(&mut field_bytes);
+                        Ok(acc)
+                    },
+                )
+            }
+            Constant::ConstantString(ConstantString(string)) => {
+                let mut bytes = string.as_bytes().to_vec();
+                bytes.push(0);
+                assert!(bytes.len() <= type_layout.layout.size as usize);
+                bytes.resize(type_layout.layout.size as usize, 0);
+                Ok(bytes)
+            }
+            Constant::ConstantNull(..) => Err(LowerError::UnimplementedGlobal(
+                "Lowering null constant is not implemented yet".to_string(),
+            )),
+        }
     }
 
     fn lower_function(
         &mut self,
         function: &FunctionPtr,
     ) -> Result<MachineFunction<RV32Arch>, LowerError> {
-        let function_name = function
-            .get_name()
-            .ok_or(LowerError::MissingFunctionName)?;
+        let function_name = function.get_name().ok_or(LowerError::MissingFunctionName)?;
         let blocks = function.as_function().blocks.borrow().clone();
         let entry = blocks
             .first()
@@ -256,12 +319,13 @@ impl RV32Lowerer {
         machine_function.entry = BlockId(0);
 
         self.initialize_blocks(&blocks, &mut machine_function, &mut state)?;
-        machine_function.entry = state
-            .block_id(&entry)
-            .ok_or_else(|| LowerError::UnknownBlock {
-                function: function_name.clone(),
-                block_name: entry.get_name(),
-            })?;
+        machine_function.entry =
+            state
+                .block_id(&entry)
+                .ok_or_else(|| LowerError::UnknownBlock {
+                    function: function_name.clone(),
+                    block_name: entry.get_name(),
+                })?;
 
         for block in &blocks {
             self.lower_block(block, &mut machine_function, &mut state)?;
@@ -324,7 +388,10 @@ impl RV32Lowerer {
 
         Err(LowerError::UnimplementedInstruction {
             function: state.function_name.clone(),
-            opcode: instruction.as_instruction().get_instruction_name().to_string(),
+            opcode: instruction
+                .as_instruction()
+                .get_instruction_name()
+                .to_string(),
         })
     }
 

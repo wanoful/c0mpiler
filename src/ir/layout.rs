@@ -5,6 +5,8 @@ use std::{
     fmt::{self, Display, Formatter},
 };
 
+use enum_as_inner::EnumAsInner;
+
 use crate::ir::ir_type::{
     ArrayType, ArrayTypePtr, StructType, StructTypeEnum, StructTypePtr, Type, TypePtr,
 };
@@ -53,7 +55,7 @@ pub struct ArrayLayout {
     pub len: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, EnumAsInner)]
 pub enum LayoutShape {
     Scalar,
     Array(ArrayLayout),

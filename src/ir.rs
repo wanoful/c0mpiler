@@ -1051,6 +1051,10 @@ impl LLVMModule {
         globals.sort_by(|(lhs, _), (rhs, _)| lhs.cmp(rhs));
         globals.into_iter().map(|(_, var)| var).collect()
     }
+
+    pub fn get_type_layout(&self, ty: &TypePtr) -> Result<layout::TypeLayout, layout::LayoutError>  {
+        self.ctx_impl.borrow_mut().type_layout_engine.layout_of(ty)
+    }
 }
 
 #[test]
