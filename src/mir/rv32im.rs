@@ -1,4 +1,4 @@
-use crate::mir::{BlockId, Register, SymbolId, TargetArch, TargetInst};
+use crate::mir::{BlockId, Register, StackSlotId, SymbolId, TargetArch, TargetInst};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RV32Arch;
@@ -17,6 +17,22 @@ pub enum RV32Reg {
     A0, A1, A2, A3, A4, A5, A6, A7, 
     S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, 
     T3, T4, T5, T6,
+}
+
+impl RV32Reg {
+    pub fn reg_a(index: usize) -> Self {
+        match index {
+            0 => RV32Reg::A0,
+            1 => RV32Reg::A1,
+            2 => RV32Reg::A2,
+            3 => RV32Reg::A3,
+            4 => RV32Reg::A4,
+            5 => RV32Reg::A5,
+            6 => RV32Reg::A6,
+            7 => RV32Reg::A7,
+            _ => panic!("Invalid register index"),
+        }
+    }
 }
 
 type Reg = Register<RV32Reg>;
@@ -80,27 +96,7 @@ pub enum RV32Inst {
     // Pseudo-instructions https://github.com/DarkSharpness/REIMU/blob/main/docs/support.md
     Mv { rd: Reg, rs: Reg },
     Li { rd: Reg, imm: i32 },
-    Neg { rd: Reg, rs: Reg },
-    Not { rd: Reg, rs: Reg },
-    Seqz { rd: Reg, rs: Reg },
-    Snez { rd: Reg, rs: Reg },
-    Sgtz { rd: Reg, rs: Reg },
-    Sltz { rd: Reg, rs: Reg },
-    Bgez { rs: Reg, label: BlockId },
-    Blez { rs: Reg, label: BlockId },
-    Bgtz { rs: Reg, label: BlockId },
-    Bltz { rs: Reg, label: BlockId },
-    Bnez { rs: Reg, label: BlockId },
-    Beqz { rs: Reg, label: BlockId },
-    Bgt { rs1: Reg, rs2: Reg, label: BlockId },
-    Ble { rs1: Reg, rs2: Reg, label: BlockId },
-    Bgtu { rs1: Reg, rs2: Reg, label: BlockId },
-    Bleu { rs1: Reg, rs2: Reg, label: BlockId },
 
-    J { label: BlockId },
-    Jal1 { label: BlockId },
-    Jr { rs: Reg },
-    Jalr1 { rs: Reg },
     Ret,
     La { rd: Reg, label: SymbolId },
     Nop,
@@ -113,6 +109,9 @@ pub enum RV32Inst {
 
     Call { func: SymbolId, num_args: usize, stack_arg_size: usize },
     Tail { func: SymbolId, num_args: usize, stack_arg_size: usize },
+
+    LoadStack { rd: Reg, slot: StackSlotId },
+    SaveStack { rs: Reg, slot: StackSlotId },
 }
 
 impl TargetInst for RV32Inst {
@@ -159,17 +158,10 @@ impl TargetInst for RV32Inst {
             | Remu { rd, .. } => vec![*rd],
             Mv { rd, .. }
             | Li { rd, .. }
-            | Neg { rd, .. }
-            | Not { rd, .. }
-            | Seqz { rd, .. }
-            | Snez { rd, .. }
-            | Sgtz { rd, .. }
-            | Sltz { rd, .. }
             | La { rd, .. }
             | Lbs { rd, .. }
             | Lhs { rd, .. }
             | Lws { rd, .. } => vec![*rd],
-            Jal1 { .. } | Jalr1 { .. } => vec![Register::Physical(RV32Reg::Ra)],
             Call { .. } => {
                 vec![
                     Register::Physical(RV32Reg::Ra),
@@ -239,25 +231,7 @@ impl TargetInst for RV32Inst {
             | Rem { rs1, rs2, .. }
             | Remu { rs1, rs2, .. } => vec![*rs1, *rs2],
 
-            Mv { rs, .. }
-            | Neg { rs, .. }
-            | Not { rs, .. }
-            | Seqz { rs, .. }
-            | Snez { rs, .. }
-            | Sgtz { rs, .. }
-            | Sltz { rs, .. } => vec![*rs],
-            Bgez { rs, .. }
-            | Blez { rs, .. }
-            | Bgtz { rs, .. }
-            | Bltz { rs, .. }
-            | Bnez { rs, .. }
-            | Beqz { rs, .. } => vec![*rs],
-            Bgt { rs1, rs2, .. }
-            | Ble { rs1, rs2, .. }
-            | Bgtu { rs1, rs2, .. }
-            | Bleu { rs1, rs2, .. } => vec![*rs1, *rs2],
-            Jr { rs } => vec![*rs],
-            Jalr1 { rs } => vec![*rs],
+            Mv { rs, .. } => vec![*rs],
             Ret => vec![
                 Register::Physical(RV32Reg::Ra),
                 Register::Physical(RV32Reg::A0),
@@ -292,20 +266,6 @@ impl TargetInst for RV32Inst {
             | Bgeu { .. }
             | Jal { .. }
             | Jalr { .. }
-            | Bgez { .. }
-            | Blez { .. }
-            | Bgtz { .. }
-            | Bltz { .. }
-            | Bnez { .. }
-            | Beqz { .. }
-            | Bgt { .. }
-            | Ble { .. }
-            | Bgtu { .. }
-            | Bleu { .. }
-            | J { .. }
-            | Jal1 { .. }
-            | Jr { .. }
-            | Jalr1 { .. }
             | Ret { .. }
             | Tail { .. } => true,
             _ => false,
