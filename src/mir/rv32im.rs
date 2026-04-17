@@ -164,7 +164,10 @@ impl TargetInst for RV32Inst {
             | La { rd, .. }
             | Lbs { rd, .. }
             | Lhs { rd, .. }
-            | Lws { rd, .. } => vec![*rd],
+            | Lws { rd, .. }
+            | LoadStack { rd, .. }
+            | LoadIncomingArg { rd, .. }
+            | GetStackAddr { rd, .. } => vec![*rd],
             Call { .. } => {
                 vec![
                     Register::Physical(RV32Reg::Ra),
@@ -241,6 +244,12 @@ impl TargetInst for RV32Inst {
                 Register::Physical(RV32Reg::A1),
             ],
             Sbs { rs, .. } | Shs { rs, .. } | Sws { rs, .. } => vec![*rs],
+            SaveStack { rs, .. } | StoreOutgoingArg { rs, .. } => {
+                vec![Register::Physical(RV32Reg::Sp), *rs]
+            }
+            LoadStack { .. } | LoadIncomingArg { .. } | GetStackAddr { .. } => {
+                vec![Register::Physical(RV32Reg::Sp)]
+            }
             Call { num_args, .. } | Tail { num_args, .. } => [
                 RV32Reg::A0,
                 RV32Reg::A1,
@@ -261,6 +270,12 @@ impl TargetInst for RV32Inst {
     fn is_terminator(&self) -> bool {
         use RV32Inst::*;
         match self {
+            Beq { .. }
+            | Bne { .. }
+            | Blt { .. }
+            | Bge { .. }
+            | Bltu { .. }
+            | Bgeu { .. }
             | Jal { .. }
             | Jalr { .. }
             | Ret { .. }
