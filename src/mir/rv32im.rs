@@ -107,11 +107,14 @@ pub enum RV32Inst {
     Shs { rs: Reg, symbol: SymbolId },
     Sws { rs: Reg, symbol: SymbolId },
 
-    Call { func: SymbolId, num_args: usize, stack_arg_size: usize },
-    Tail { func: SymbolId, num_args: usize, stack_arg_size: usize },
+    Call { func: SymbolId, num_args: usize },
+    Tail { func: SymbolId, num_args: usize },
 
     LoadStack { rd: Reg, slot: StackSlotId },
     SaveStack { rs: Reg, slot: StackSlotId },
+    StoreOutgoingArg { rs: Reg, offset: i32 },
+    LoadIncomingArg { rd: Reg, offset: i32 },
+    GetStackAddr { rd: Reg, slot: StackSlotId },
 }
 
 impl TargetInst for RV32Inst {
@@ -258,12 +261,6 @@ impl TargetInst for RV32Inst {
     fn is_terminator(&self) -> bool {
         use RV32Inst::*;
         match self {
-            Beq { .. }
-            | Bne { .. }
-            | Blt { .. }
-            | Bge { .. }
-            | Bltu { .. }
-            | Bgeu { .. }
             | Jal { .. }
             | Jalr { .. }
             | Ret { .. }

@@ -39,7 +39,6 @@ pub enum StackSlotKind {
     Alloca,
     Spill,
     CalleeSaved,
-    OutgoingArg,
     LocalTemp,
 }
 
@@ -66,6 +65,8 @@ pub struct FrameInfo {
 pub struct FrameLayout {
     pub frame_size: usize,
     pub slot_offsets: HashMap<StackSlotId, isize>,
+    pub outgoing_arg_offset: isize,
+    pub incoming_arg_offset: isize,
 }
 
 pub struct MachineFunction<T: TargetArch> {
@@ -104,6 +105,14 @@ impl<T: TargetArch> MachineFunction<T> {
 
     pub fn record_outgoing_arg(&mut self, size: usize) {
         self.frame_info.max_outgoing_arg_size = self.frame_info.max_outgoing_arg_size.max(size);
+    }
+
+    pub fn get_block_mut(&mut self, block_id: BlockId) -> Option<&mut MachineBlock<T>> {
+        self.blocks.iter_mut().find(|b| b.id == block_id)
+    }
+
+    pub fn get_block(&self, block_id: BlockId) -> Option<&MachineBlock<T>> {
+        self.blocks.iter().find(|b| b.id == block_id)
     }
 }
 
