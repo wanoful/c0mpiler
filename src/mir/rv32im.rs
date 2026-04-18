@@ -1,4 +1,6 @@
-use crate::mir::{BlockId, Register, StackSlotId, SymbolId, TargetArch, TargetInst};
+use crate::mir::{
+    BlockId, LoweringTarget, Register, StackSlotId, SymbolId, TargetArch, TargetInst,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RV32Arch;
@@ -6,6 +8,12 @@ pub struct RV32Arch;
 impl TargetArch for RV32Arch {
     type PhysicalReg = RV32Reg;
     type MachineInst = RV32Inst;
+}
+
+impl Default for RV32Arch {
+    fn default() -> Self {
+        Self
+    }
 }
 
 #[rustfmt::skip]
@@ -296,5 +304,192 @@ impl TargetInst for RV32Inst {
         Self: Sized,
     {
         RV32Inst::Mv { rd, rs }
+    }
+}
+
+impl LoweringTarget for RV32Arch {
+    fn zero_reg() -> Self::PhysicalReg {
+        RV32Reg::Zero
+    }
+
+    fn return_reg() -> Self::PhysicalReg {
+        RV32Reg::A0
+    }
+
+    fn arg_reg(index: usize) -> Self::PhysicalReg {
+        RV32Reg::reg_a(index)
+    }
+
+    fn num_arg_regs() -> usize {
+        8
+    }
+
+    fn stack_arg_size() -> usize {
+        4
+    }
+
+    fn stack_arg_offset(stack_index: usize) -> i32 {
+        (stack_index * 4) as i32
+    }
+
+    fn emit_add(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV32Inst::Add { rd, rs1, rs2 }
+    }
+
+    fn emit_sub(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV32Inst::Sub { rd, rs1, rs2 }
+    }
+
+    fn emit_xor(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV32Inst::Xor { rd, rs1, rs2 }
+    }
+
+    fn emit_or(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV32Inst::Or { rd, rs1, rs2 }
+    }
+
+    fn emit_and(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV32Inst::And { rd, rs1, rs2 }
+    }
+
+    fn emit_sll(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV32Inst::Sll { rd, rs1, rs2 }
+    }
+
+    fn emit_srl(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV32Inst::Srl { rd, rs1, rs2 }
+    }
+
+    fn emit_sra(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV32Inst::Sra { rd, rs1, rs2 }
+    }
+
+    fn emit_slt(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV32Inst::Slt { rd, rs1, rs2 }
+    }
+
+    fn emit_sltu(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV32Inst::Sltu { rd, rs1, rs2 }
+    }
+
+    fn emit_mul(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV32Inst::Mul { rd, rs1, rs2 }
+    }
+
+    fn emit_div(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV32Inst::Div { rd, rs1, rs2 }
+    }
+
+    fn emit_divu(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV32Inst::Divu { rd, rs1, rs2 }
+    }
+
+    fn emit_rem(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV32Inst::Rem { rd, rs1, rs2 }
+    }
+
+    fn emit_remu(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV32Inst::Remu { rd, rs1, rs2 }
+    }
+
+    fn emit_addi(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {
+        RV32Inst::Addi { rd, rs1, imm }
+    }
+
+    fn emit_xori(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {
+        RV32Inst::Xori { rd, rs1, imm }
+    }
+
+    fn emit_ori(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {
+        RV32Inst::Ori { rd, rs1, imm }
+    }
+
+    fn emit_andi(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {
+        RV32Inst::Andi { rd, rs1, imm }
+    }
+
+    fn emit_slli(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {
+        RV32Inst::Slli { rd, rs1, imm }
+    }
+
+    fn emit_srli(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {
+        RV32Inst::Srli { rd, rs1, imm }
+    }
+
+    fn emit_srai(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {
+        RV32Inst::Srai { rd, rs1, imm }
+    }
+
+    fn emit_sltiu(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {
+        RV32Inst::Sltiu { rd, rs1, imm }
+    }
+
+    fn emit_branch_ne(rs1: Reg, rs2: Reg, label: BlockId) -> Self::MachineInst {
+        RV32Inst::Bne { rs1, rs2, label }
+    }
+
+    fn emit_jump(label: BlockId) -> Self::MachineInst {
+        RV32Inst::Jal {
+            rd: Register::Physical(RV32Reg::Zero),
+            label,
+        }
+    }
+
+    fn emit_call(func: SymbolId, num_args: usize) -> Self::MachineInst {
+        RV32Inst::Call { func, num_args }
+    }
+
+    fn emit_ret() -> Self::MachineInst {
+        RV32Inst::Ret
+    }
+
+    fn emit_load_mem(rd: Reg, rs1: Reg, imm: i32, size: usize, unsigned: bool) -> Self::MachineInst {
+        match (size, unsigned) {
+            (1, false) => RV32Inst::Lb { rd, rs1, imm },
+            (1, true) => RV32Inst::Lbu { rd, rs1, imm },
+            (2, false) => RV32Inst::Lh { rd, rs1, imm },
+            (2, true) => RV32Inst::Lhu { rd, rs1, imm },
+            (4, _) => RV32Inst::Lw { rd, rs1, imm },
+            _ => panic!("unsupported load size"),
+        }
+    }
+
+    fn emit_load_global(rd: Reg, symbol: SymbolId, size: usize, unsigned: bool) -> Self::MachineInst {
+        match (size, unsigned) {
+            (1, false) => RV32Inst::Lbs { rd, symbol },
+            (2, false) => RV32Inst::Lhs { rd, symbol },
+            (4, _) => RV32Inst::Lws { rd, symbol },
+            _ => panic!("unsupported global load kind"),
+        }
+    }
+
+    fn emit_store_mem(rs1: Reg, rs2: Reg, imm: i32, size: usize) -> Self::MachineInst {
+        match size {
+            1 => RV32Inst::Sb { rs1, rs2, imm },
+            2 => RV32Inst::Sh { rs1, rs2, imm },
+            4 => RV32Inst::Sw { rs1, rs2, imm },
+            _ => panic!("unsupported store size"),
+        }
+    }
+
+    fn emit_store_global(rs: Reg, symbol: SymbolId, size: usize) -> Self::MachineInst {
+        match size {
+            1 => RV32Inst::Sbs { rs, symbol },
+            2 => RV32Inst::Shs { rs, symbol },
+            4 => RV32Inst::Sws { rs, symbol },
+            _ => panic!("unsupported global store kind"),
+        }
+    }
+
+    fn emit_store_outgoing_arg(rs: Reg, offset: i32) -> Self::MachineInst {
+        RV32Inst::StoreOutgoingArg { rs, offset }
+    }
+
+    fn emit_load_incoming_arg(rd: Reg, offset: i32) -> Self::MachineInst {
+        RV32Inst::LoadIncomingArg { rd, offset }
+    }
+
+    fn emit_get_stack_addr(rd: Reg, slot: StackSlotId) -> Self::MachineInst {
+        RV32Inst::GetStackAddr { rd, slot }
     }
 }

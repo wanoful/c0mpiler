@@ -4,6 +4,7 @@ use std::{
     collections::{HashMap, HashSet},
     error::Error,
     fmt::{self, Display, Formatter},
+    marker::PhantomData,
     rc::Rc,
 };
 
@@ -19,9 +20,8 @@ use crate::{
     },
     mir::{
         BlockId, FrameInfo, FrameLayout, Linkage, MachineBlock, MachineFunction, MachineModule,
-        MachineSegment, MachineSymbolKind, Register, StackSlotId, SymbolId, TargetArch, VRegId,
-        lower::phi::PhiInfo,
-        rv32im::{RV32Arch, RV32Inst, RV32Reg},
+        MachineSegment, MachineSymbolKind, LoweringTarget, Register, StackSlotId, SymbolId,
+        TargetArch, VRegId, lower::phi::PhiInfo,
     },
 };
 
@@ -213,6 +213,120 @@ fn parallel_copy<R: TargetArch>(
     Ok(())
 }
 
+fn emit_masked_value<T: LoweringTarget>(
+    src: Register<T::PhysicalReg>,
+    bits: u8,
+    out: &mut Vec<T::MachineInst>,
+    machine_function: &mut MachineFunction<T>,
+) -> Register<T::PhysicalReg> {
+    if bits >= 32 {
+        return src;
+    }
+
+    let rd = Register::Virtual(machine_function.new_vreg());
+    let mask = (1u32 << bits) - 1;
+    if mask <= 0x7ff {
+        out.push(T::emit_andi(rd, src, mask as i32));
+    } else {
+        let mask_reg = Register::Virtual(machine_function.new_vreg());
+        out.push(T::MachineInst::load_imm(mask_reg, mask as i32));
+        out.push(T::emit_and(rd, src, mask_reg));
+    }
+
+    rd
+}
+
+fn emit_add_offset<T: LoweringTarget>(
+    base: Register<T::PhysicalReg>,
+    stride: u32,
+    index: &ValuePtr,
+    out: &mut Vec<T::MachineInst>,
+    machine_function: &mut MachineFunction<T>,
+    state: &mut FunctionLoweringState,
+) -> Result<Register<T::PhysicalReg>, LowerError> {
+    if let ValueKind::Constant(Constant::ConstantInt(number)) = &index.kind {
+        let imm = (number.0 as i32).checked_mul(stride as i32).unwrap();
+        if (-2048..=2047).contains(&imm) {
+            let result_reg = Register::Virtual(machine_function.new_vreg());
+            out.push(T::emit_addi(result_reg, base, imm));
+            Ok(result_reg)
+        } else {
+            let temp_reg = Register::Virtual(machine_function.new_vreg());
+            out.push(T::MachineInst::load_imm(temp_reg, imm));
+            let result_reg = Register::Virtual(machine_function.new_vreg());
+            out.push(T::emit_add(result_reg, base, temp_reg));
+            Ok(result_reg)
+        }
+    } else {
+        if stride == 0 {
+            return Ok(base);
+        }
+
+        let index_reg = lower_operand(index, out, state, machine_function)?;
+        let temp_reg = Register::Virtual(machine_function.new_vreg());
+        if stride.is_power_of_two() {
+            out.push(T::emit_slli(
+                temp_reg,
+                index_reg,
+                stride.trailing_zeros() as i32,
+            ));
+        } else {
+            let stride_reg = Register::Virtual(machine_function.new_vreg());
+            out.push(T::MachineInst::load_imm(stride_reg, stride as i32));
+            out.push(T::emit_mul(temp_reg, index_reg, stride_reg));
+        }
+        let result_reg = Register::Virtual(machine_function.new_vreg());
+        out.push(T::emit_add(result_reg, base, temp_reg));
+        Ok(result_reg)
+    }
+}
+
+fn emit_icmp<T: LoweringTarget>(
+    icmp_code: &ICmpCode,
+    rd: Register<T::PhysicalReg>,
+    rs1: Register<T::PhysicalReg>,
+    rs2: Register<T::PhysicalReg>,
+    out: &mut Vec<T::MachineInst>,
+    machine_function: &mut MachineFunction<T>,
+) {
+    match icmp_code {
+        ICmpCode::Eq => {
+            let tmp = Register::Virtual(machine_function.new_vreg());
+            out.push(T::emit_xor(tmp, rs1, rs2));
+            out.push(T::emit_sltiu(rd, tmp, 1));
+        }
+        ICmpCode::Ne => {
+            let tmp = Register::Virtual(machine_function.new_vreg());
+            out.push(T::emit_xor(tmp, rs1, rs2));
+            out.push(T::emit_sltu(rd, Register::Physical(T::zero_reg()), tmp));
+        }
+        ICmpCode::Ugt => out.push(T::emit_sltu(rd, rs2, rs1)),
+        ICmpCode::Uge => {
+            let tmp = Register::Virtual(machine_function.new_vreg());
+            out.push(T::emit_sltu(tmp, rs1, rs2));
+            out.push(T::emit_xori(rd, tmp, 1));
+        }
+        ICmpCode::Ult => out.push(T::emit_sltu(rd, rs1, rs2)),
+        ICmpCode::Ule => {
+            let tmp = Register::Virtual(machine_function.new_vreg());
+            out.push(T::emit_sltu(tmp, rs2, rs1));
+            out.push(T::emit_xori(rd, tmp, 1));
+        }
+        ICmpCode::Sgt => out.push(T::emit_slt(rd, rs2, rs1)),
+        ICmpCode::Sge => {
+            let tmp = Register::Virtual(machine_function.new_vreg());
+            out.push(T::emit_slt(tmp, rs1, rs2));
+            out.push(T::emit_xori(rd, tmp, 1));
+        }
+        ICmpCode::Slt => out.push(T::emit_slt(rd, rs1, rs2)),
+        ICmpCode::Sle => {
+            let tmp = Register::Virtual(machine_function.new_vreg());
+            out.push(T::emit_slt(tmp, rs2, rs1));
+            out.push(T::emit_xori(rd, tmp, 1));
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct ModuleLoweringState {
     function_symbols: HashMap<String, SymbolId>,
@@ -259,24 +373,39 @@ impl FunctionLoweringState {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct RV32Lowerer {
+#[derive(Debug)]
+pub struct Lowerer<T: LoweringTarget> {
     options: LowerOptions,
+    _marker: PhantomData<T>,
 }
 
-impl RV32Lowerer {
+impl<T: LoweringTarget> Default for Lowerer<T> {
+    fn default() -> Self {
+        Self {
+            options: LowerOptions::default(),
+            _marker: PhantomData,
+        }
+    }
+}
+
+pub type RV32Lowerer = Lowerer<crate::mir::rv32im::RV32Arch>;
+
+impl<T: LoweringTarget> Lowerer<T> {
     pub fn new() -> Self {
         Self::default()
     }
 
     pub fn with_options(options: LowerOptions) -> Self {
-        Self { options }
+        Self {
+            options,
+            _marker: PhantomData,
+        }
     }
 
     pub fn lower_module(
         &mut self,
         module: &LLVMModule,
-    ) -> Result<MachineModule<RV32Arch>, LowerError> {
+    ) -> Result<MachineModule<T>, LowerError> {
         let mut machine_module = MachineModule::default();
         let mut module_state = ModuleLoweringState::default();
 
@@ -293,7 +422,7 @@ impl RV32Lowerer {
     fn collect_symbols(
         &mut self,
         module: &LLVMModule,
-        machine_module: &mut MachineModule<RV32Arch>,
+        machine_module: &mut MachineModule<T>,
         state: &mut ModuleLoweringState,
     ) -> Result<(), LowerError> {
         for global in module.global_variables() {
@@ -339,7 +468,7 @@ impl RV32Lowerer {
     fn lower_globals(
         &mut self,
         module: &LLVMModule,
-        machine_module: &mut MachineModule<RV32Arch>,
+        machine_module: &mut MachineModule<T>,
         state: &ModuleLoweringState,
     ) -> Result<(), LowerError> {
         for global in module.global_variables() {
@@ -365,7 +494,7 @@ impl RV32Lowerer {
     fn lower_functions(
         &mut self,
         module: &LLVMModule,
-        machine_module: &mut MachineModule<RV32Arch>,
+        machine_module: &mut MachineModule<T>,
         state: &ModuleLoweringState,
     ) -> Result<(), LowerError> {
         for function in module.functions_in_order() {
@@ -386,7 +515,7 @@ impl RV32Lowerer {
         &mut self,
         module: &LLVMModule,
         global: &GlobalVariablePtr,
-    ) -> Result<MachineSymbolKind<RV32Arch>, LowerError> {
+    ) -> Result<MachineSymbolKind<T>, LowerError> {
         let initializer = global.as_global_variable().initializer.clone();
 
         Ok(MachineSymbolKind::Data(
@@ -447,8 +576,8 @@ impl RV32Lowerer {
         &mut self,
         function: &FunctionPtr,
         module: &LLVMModule,
-        machine_module: &mut MachineModule<RV32Arch>,
-    ) -> Result<MachineFunction<RV32Arch>, LowerError> {
+        machine_module: &mut MachineModule<T>,
+    ) -> Result<MachineFunction<T>, LowerError> {
         let function_name = function.get_name().unwrap();
         let blocks = function.as_function().blocks.borrow().clone();
         let entry = blocks
@@ -490,7 +619,7 @@ impl RV32Lowerer {
     fn initialize_blocks(
         &mut self,
         blocks: &[BasicBlockPtr],
-        machine_function: &mut MachineFunction<RV32Arch>,
+        machine_function: &mut MachineFunction<T>,
         state: &mut FunctionLoweringState,
     ) -> Result<(), LowerError> {
         for (index, block) in blocks.iter().enumerate() {
@@ -510,9 +639,9 @@ impl RV32Lowerer {
     fn lower_block(
         &mut self,
         block: &BasicBlockPtr,
-        machine_function: &mut MachineFunction<RV32Arch>,
+        machine_function: &mut MachineFunction<T>,
         module: &LLVMModule,
-        machine_module: &mut MachineModule<RV32Arch>,
+        machine_module: &mut MachineModule<T>,
         state: &mut FunctionLoweringState,
     ) -> Result<(), LowerError> {
         let block_id = state.block_id(block).unwrap();
@@ -542,46 +671,12 @@ impl RV32Lowerer {
         instruction: &InstructionPtr,
         block_id: BlockId,
         module: &LLVMModule,
-        machine_function: &mut MachineFunction<RV32Arch>,
-        machine_module: &mut MachineModule<RV32Arch>,
+        machine_function: &mut MachineFunction<T>,
+        machine_module: &mut MachineModule<T>,
         state: &mut FunctionLoweringState,
-    ) -> Result<Vec<RV32Inst>, LowerError> {
+    ) -> Result<Vec<T::MachineInst>, LowerError> {
         let inst = instruction.as_instruction();
         let operands = &inst.operands;
-
-        fn emit_masked_value(
-            src: Register<RV32Reg>,
-            bits: u8,
-            out: &mut Vec<RV32Inst>,
-            machine_function: &mut MachineFunction<RV32Arch>,
-        ) -> Register<RV32Reg> {
-            if bits >= 32 {
-                return src;
-            }
-
-            let rd = Register::Virtual(machine_function.new_vreg());
-            let mask = (1u32 << bits) - 1;
-            if mask <= 0x7ff {
-                out.push(RV32Inst::Andi {
-                    rd,
-                    rs1: src,
-                    imm: mask as i32,
-                });
-            } else {
-                let mask_reg = Register::Virtual(machine_function.new_vreg());
-                out.push(RV32Inst::Li {
-                    rd: mask_reg,
-                    imm: mask as i32,
-                });
-                out.push(RV32Inst::And {
-                    rd,
-                    rs1: src,
-                    rs2: mask_reg,
-                });
-            }
-
-            rd
-        }
 
         let mut out = Vec::new();
 
@@ -594,8 +689,6 @@ impl RV32Lowerer {
 
                 if let crate::ir::ir_value::ValueKind::Constant(Constant::ConstantInt(number)) =
                     &operands[1].kind
-                    && number.0 as i32 <= 2047
-                    && number.0 as i32 >= -2048
                     && matches!(
                         binary_opcode,
                         Add | Sub | Shl | LShr | AShr | And | Or | Xor
@@ -605,14 +698,17 @@ impl RV32Lowerer {
                     let rd = Register::Virtual(rd_vreg);
                     let imm = number.0 as i32;
                     let inst = match binary_opcode {
-                        Add => Some(RV32Inst::Addi { rd, rs1, imm }),
-                        Sub => Some(RV32Inst::Addi { rd, rs1, imm: -imm }),
-                        Shl => Some(RV32Inst::Slli { rd, rs1, imm }),
-                        LShr => Some(RV32Inst::Srli { rd, rs1, imm }),
-                        AShr => Some(RV32Inst::Srai { rd, rs1, imm }),
-                        And => Some(RV32Inst::Andi { rd, rs1, imm }),
-                        Or => Some(RV32Inst::Ori { rd, rs1, imm }),
-                        Xor => Some(RV32Inst::Xori { rd, rs1, imm }),
+                        Add if (-2048..=2047).contains(&imm) => Some(T::emit_addi(rd, rs1, imm)),
+                        Sub => imm
+                            .checked_neg()
+                            .filter(|neg_imm| (-2048..=2047).contains(neg_imm))
+                            .map(|neg_imm| T::emit_addi(rd, rs1, neg_imm)),
+                        Shl if (0..32).contains(&imm) => Some(T::emit_slli(rd, rs1, imm)),
+                        LShr if (0..32).contains(&imm) => Some(T::emit_srli(rd, rs1, imm)),
+                        AShr if (0..32).contains(&imm) => Some(T::emit_srai(rd, rs1, imm)),
+                        And if (-2048..=2047).contains(&imm) => Some(T::emit_andi(rd, rs1, imm)),
+                        Or if (-2048..=2047).contains(&imm) => Some(T::emit_ori(rd, rs1, imm)),
+                        Xor if (-2048..=2047).contains(&imm) => Some(T::emit_xori(rd, rs1, imm)),
                         _ => None,
                     };
 
@@ -628,19 +724,19 @@ impl RV32Lowerer {
                 let rd = Register::Virtual(rd_vreg);
 
                 let inst = match binary_opcode {
-                    Add => RV32Inst::Add { rd, rs1, rs2 },
-                    Sub => RV32Inst::Sub { rd, rs1, rs2 },
-                    Mul => RV32Inst::Mul { rd, rs1, rs2 },
-                    UDiv => RV32Inst::Divu { rd, rs1, rs2 },
-                    SDiv => RV32Inst::Div { rd, rs1, rs2 },
-                    URem => RV32Inst::Remu { rd, rs1, rs2 },
-                    SRem => RV32Inst::Rem { rd, rs1, rs2 },
-                    And => RV32Inst::And { rd, rs1, rs2 },
-                    Or => RV32Inst::Or { rd, rs1, rs2 },
-                    Xor => RV32Inst::Xor { rd, rs1, rs2 },
-                    Shl => RV32Inst::Sll { rd, rs1, rs2 },
-                    LShr => RV32Inst::Srl { rd, rs1, rs2 },
-                    AShr => RV32Inst::Sra { rd, rs1, rs2 },
+                    Add => T::emit_add(rd, rs1, rs2),
+                    Sub => T::emit_sub(rd, rs1, rs2),
+                    Mul => T::emit_mul(rd, rs1, rs2),
+                    UDiv => T::emit_divu(rd, rs1, rs2),
+                    SDiv => T::emit_div(rd, rs1, rs2),
+                    URem => T::emit_remu(rd, rs1, rs2),
+                    SRem => T::emit_rem(rd, rs1, rs2),
+                    And => T::emit_and(rd, rs1, rs2),
+                    Or => T::emit_or(rd, rs1, rs2),
+                    Xor => T::emit_xor(rd, rs1, rs2),
+                    Shl => T::emit_sll(rd, rs1, rs2),
+                    LShr => T::emit_srl(rd, rs1, rs2),
+                    AShr => T::emit_sra(rd, rs1, rs2),
                 };
 
                 out.push(inst);
@@ -650,36 +746,29 @@ impl RV32Lowerer {
                 let func_id = machine_module.symbol_map[&operands[0].get_name().unwrap()];
                 let args = &operands[1..];
                 let num_args = args.len();
-                let stack_arg_size = if num_args > 8 { (num_args - 8) * 4 } else { 0 };
+                let stack_arg_size = num_args.saturating_sub(T::num_arg_regs()) * T::stack_arg_size();
                 machine_function.record_outgoing_arg(stack_arg_size);
 
                 for (index, arg) in args.iter().enumerate() {
                     let rs = lower_operand(arg, &mut out, state, machine_function)?;
-                    if index < 8 {
-                        out.push(RV32Inst::Mv {
-                            rd: Register::Physical(RV32Reg::reg_a(index)),
-                            rs,
-                        });
+                    if index < T::num_arg_regs() {
+                        out.push(T::MachineInst::mv(Register::Physical(T::arg_reg(index)), rs));
                     } else {
-                        let offset = (index - 8) * 4;
-                        out.push(RV32Inst::StoreOutgoingArg {
+                        out.push(T::emit_store_outgoing_arg(
                             rs,
-                            offset: offset as i32,
-                        });
+                            T::stack_arg_offset(index - T::num_arg_regs()),
+                        ));
                     }
                 }
 
-                out.push(RV32Inst::Call {
-                    func: func_id,
-                    num_args,
-                });
+                out.push(T::emit_call(func_id, num_args));
 
                 if !instruction.get_type().is_void() {
                     let rd_vreg = machine_function.new_vreg();
-                    out.push(RV32Inst::Mv {
-                        rd: Register::Virtual(rd_vreg),
-                        rs: Register::Physical(RV32Reg::A0),
-                    });
+                    out.push(T::MachineInst::mv(
+                        Register::Virtual(rd_vreg),
+                        Register::Physical(T::return_reg()),
+                    ));
                     state.record_vreg(instruction, rd_vreg);
                 }
             }
@@ -721,7 +810,7 @@ impl RV32Lowerer {
                     let mut add_transit_block =
                         |target_block_id: BlockId, target_block_phis: Vec<(VRegId, ValuePtr)>| {
                             let transit_block_id = machine_function.blocks.len();
-                            let mut transit_insts: Vec<RV32Inst> = Vec::new();
+                            let mut transit_insts: Vec<T::MachineInst> = Vec::new();
 
                             parallel_copy(
                                 target_block_phis,
@@ -729,10 +818,7 @@ impl RV32Lowerer {
                                 state,
                                 machine_function,
                             )?;
-                            transit_insts.push(RV32Inst::Jal {
-                                rd: Register::Physical(RV32Reg::Zero),
-                                label: target_block_id,
-                            });
+                            transit_insts.push(T::emit_jump(target_block_id));
                             let transit_block = MachineBlock {
                                 id: BlockId(transit_block_id),
                                 name: format!(".bb{transit_block_id}"),
@@ -755,15 +841,12 @@ impl RV32Lowerer {
                             add_transit_block(false_block_id, false_block_phis.clone())?;
                     };
 
-                    out.push(RV32Inst::Bne {
-                        rs1: cond,
-                        rs2: Register::Physical(RV32Reg::Zero),
-                        label: true_block_id,
-                    });
-                    out.push(RV32Inst::Jal {
-                        rd: Register::Physical(RV32Reg::Zero),
-                        label: false_block_id,
-                    });
+                    out.push(T::emit_branch_ne(
+                        cond,
+                        Register::Physical(T::zero_reg()),
+                        true_block_id,
+                    ));
+                    out.push(T::emit_jump(false_block_id));
                 } else {
                     let target_block_id = state
                         .block_id(&BasicBlockPtr(operands[0].clone()))
@@ -783,89 +866,17 @@ impl RV32Lowerer {
                         parallel_copy(target_block_phis, &mut out, state, machine_function)?;
                     }
 
-                    out.push(RV32Inst::Jal {
-                        rd: Register::Physical(RV32Reg::Zero),
-                        label: target_block_id,
-                    });
+                    out.push(T::emit_jump(target_block_id));
                 }
             }
             GetElementPtr { base_ty } => {
-                fn add_offset(
-                    base: Register<RV32Reg>,
-                    stride: u32,
-                    index: &ValuePtr,
-                    out: &mut Vec<RV32Inst>,
-                    machine_function: &mut MachineFunction<RV32Arch>,
-                    state: &mut FunctionLoweringState,
-                ) -> Result<Register<RV32Reg>, LowerError> {
-                    if let ValueKind::Constant(Constant::ConstantInt(number)) = &index.kind {
-                        let imm = (number.0 as i32).checked_mul(stride as i32).unwrap();
-                        if imm <= 2047 && imm >= -2048 {
-                            let result_vreg = machine_function.new_vreg();
-                            let result_reg = Register::Virtual(result_vreg);
-                            out.push(RV32Inst::Addi {
-                                rd: result_reg,
-                                rs1: base,
-                                imm,
-                            });
-                            Ok(result_reg)
-                        } else {
-                            let temp_vreg = machine_function.new_vreg();
-                            let temp_reg = Register::Virtual(temp_vreg);
-                            out.push(RV32Inst::Li { rd: temp_reg, imm });
-                            let result_vreg = machine_function.new_vreg();
-                            let result_reg = Register::Virtual(result_vreg);
-                            out.push(RV32Inst::Add {
-                                rd: result_reg,
-                                rs1: base,
-                                rs2: temp_reg,
-                            });
-                            Ok(result_reg)
-                        }
-                    } else {
-                        if stride == 0 {
-                            return Ok(base);
-                        }
-
-                        let index_reg = lower_operand(index, out, state, machine_function)?;
-                        let temp_vreg = machine_function.new_vreg();
-                        let temp_reg = Register::Virtual(temp_vreg);
-                        if stride.is_power_of_two() {
-                            out.push(RV32Inst::Slli {
-                                rd: temp_reg,
-                                rs1: index_reg,
-                                imm: stride.trailing_zeros() as i32,
-                            });
-                        } else {
-                            let stride_reg = Register::Virtual(machine_function.new_vreg());
-                            out.push(RV32Inst::Li {
-                                rd: stride_reg,
-                                imm: stride as i32,
-                            });
-                            out.push(RV32Inst::Mul {
-                                rd: temp_reg,
-                                rs1: index_reg,
-                                rs2: stride_reg,
-                            });
-                        }
-                        let result_vreg = machine_function.new_vreg();
-                        let result_reg = Register::Virtual(result_vreg);
-                        out.push(RV32Inst::Add {
-                            rd: result_reg,
-                            rs1: base,
-                            rs2: temp_reg,
-                        });
-                        Ok(result_reg)
-                    }
-                }
-
                 let mut base = lower_operand(&operands[0], &mut out, state, machine_function)?;
                 let base_index = &operands[1];
                 let indices = &operands[2..];
 
                 let mut ty = base_ty.clone();
                 let type_layout = module.get_type_layout(&ty).unwrap();
-                base = add_offset(
+                base = emit_add_offset(
                     base,
                     type_layout.layout.stride(),
                     base_index,
@@ -891,32 +902,27 @@ impl RV32Lowerer {
                                     });
                                 };
                             let field_layout = &struct_layout.fields[field_index];
-                            let temp_vreg = machine_function.new_vreg();
-                            let temp_reg = Register::Virtual(temp_vreg);
+                            let temp_reg = Register::Virtual(machine_function.new_vreg());
                             if field_layout.offset <= 2047 {
-                                out.push(RV32Inst::Addi {
-                                    rd: temp_reg,
-                                    rs1: base,
-                                    imm: field_layout.offset as i32,
-                                });
+                                out.push(T::emit_addi(
+                                    temp_reg,
+                                    base,
+                                    field_layout.offset as i32,
+                                ));
                             } else {
                                 let imm_reg = Register::Virtual(machine_function.new_vreg());
-                                out.push(RV32Inst::Li {
-                                    rd: imm_reg,
-                                    imm: field_layout.offset as i32,
-                                });
-                                out.push(RV32Inst::Add {
-                                    rd: temp_reg,
-                                    rs1: base,
-                                    rs2: imm_reg,
-                                });
+                                out.push(T::MachineInst::load_imm(
+                                    imm_reg,
+                                    field_layout.offset as i32,
+                                ));
+                                out.push(T::emit_add(temp_reg, base, imm_reg));
                             }
                             base = temp_reg;
                             ty = ty.as_struct().unwrap().get_body().unwrap()[field_index].clone();
                         }
                         LayoutShape::Array(_) => {
                             let array_layout = type_layout.shape.as_array().unwrap();
-                            base = add_offset(
+                            base = emit_add_offset(
                                 base,
                                 array_layout.stride,
                                 index,
@@ -939,10 +945,7 @@ impl RV32Lowerer {
                     Register::Virtual(vreg) => vreg,
                     Register::Physical(_) => {
                         let result_vreg = machine_function.new_vreg();
-                        out.push(RV32Inst::Mv {
-                            rd: Register::Virtual(result_vreg),
-                            rs: base,
-                        });
+                        out.push(T::MachineInst::mv(Register::Virtual(result_vreg), base));
                         result_vreg
                     }
                 };
@@ -958,20 +961,21 @@ impl RV32Lowerer {
                     .stack_slots
                     .insert(Rc::as_ptr(instruction), stack_slot_id);
                 let rd_vreg = machine_function.new_vreg();
-                out.push(RV32Inst::GetStackAddr {
-                    rd: Register::Virtual(rd_vreg),
-                    slot: stack_slot_id,
-                });
+                out.push(T::emit_get_stack_addr(
+                    Register::Virtual(rd_vreg),
+                    stack_slot_id,
+                ));
                 state.record_vreg(instruction, rd_vreg);
             }
             Load => {
                 let rd_vreg = machine_function.new_vreg();
                 let ty = instruction.get_type();
                 let type_layout = module.get_type_layout(ty).unwrap();
+                let rd = Register::Virtual(rd_vreg);
                 let (symbol_id, rs1) = if operands[0].kind.is_global_object() {
                     let name = operands[0].get_name().unwrap();
                     let symbol_id = machine_module.symbol_map[&name];
-                    (Some(symbol_id), Register::Physical(RV32Reg::Zero))
+                    (Some(symbol_id), Register::Physical(T::zero_reg()))
                 } else {
                     (
                         None,
@@ -979,47 +983,18 @@ impl RV32Lowerer {
                     )
                 };
 
-                match type_layout.layout.size {
-                    1 => {
+                match type_layout.layout.size as usize {
+                    1 | 2 | 4 => {
                         if let Some(symbol_id) = symbol_id {
-                            out.push(RV32Inst::Lbs {
-                                rd: Register::Virtual(rd_vreg),
-                                symbol: symbol_id,
-                            });
+                            out.push(T::emit_load_global(rd, symbol_id, type_layout.layout.size as usize, false));
                         } else {
-                            out.push(RV32Inst::Lbu {
-                                rd: Register::Virtual(rd_vreg),
+                            out.push(T::emit_load_mem(
+                                rd,
                                 rs1,
-                                imm: 0,
-                            });
-                        }
-                    }
-                    2 => {
-                        if let Some(symbol_id) = symbol_id {
-                            out.push(RV32Inst::Lhs {
-                                rd: Register::Virtual(rd_vreg),
-                                symbol: symbol_id,
-                            });
-                        } else {
-                            out.push(RV32Inst::Lhu {
-                                rd: Register::Virtual(rd_vreg),
-                                rs1,
-                                imm: 0,
-                            });
-                        }
-                    }
-                    4 => {
-                        if let Some(symbol_id) = symbol_id {
-                            out.push(RV32Inst::Lws {
-                                rd: Register::Virtual(rd_vreg),
-                                symbol: symbol_id,
-                            });
-                        } else {
-                            out.push(RV32Inst::Lw {
-                                rd: Register::Virtual(rd_vreg),
-                                rs1,
-                                imm: 0,
-                            });
+                                0,
+                                type_layout.layout.size as usize,
+                                type_layout.layout.size < 4,
+                            ));
                         }
                     }
                     _ => panic!("unsupported load size"),
@@ -1029,12 +1004,9 @@ impl RV32Lowerer {
             Ret { is_void } => {
                 if !*is_void {
                     let rs = lower_operand(&operands[0], &mut out, state, machine_function)?;
-                    out.push(RV32Inst::Mv {
-                        rd: Register::Physical(RV32Reg::A0),
-                        rs,
-                    });
+                    out.push(T::MachineInst::mv(Register::Physical(T::return_reg()), rs));
                 }
-                out.push(RV32Inst::Ret);
+                out.push(T::emit_ret());
             }
             Store => {
                 let rs2 = lower_operand(&operands[0], &mut out, state, machine_function)?;
@@ -1043,29 +1015,17 @@ impl RV32Lowerer {
                 if addr.kind.is_global_object() {
                     let name = addr.get_name().unwrap();
                     let symbol = machine_module.symbol_map[&name];
-                    match type_layout.layout.size {
-                        1 => {
-                            out.push(RV32Inst::Sbs { rs: rs2, symbol });
-                        }
-                        2 => {
-                            out.push(RV32Inst::Shs { rs: rs2, symbol });
-                        }
-                        4 => {
-                            out.push(RV32Inst::Sws { rs: rs2, symbol });
+                    match type_layout.layout.size as usize {
+                        1 | 2 | 4 => {
+                            out.push(T::emit_store_global(rs2, symbol, type_layout.layout.size as usize));
                         }
                         _ => panic!("unsupported store size"),
                     }
                 } else {
                     let rs1 = lower_operand(addr, &mut out, state, machine_function)?;
-                    match type_layout.layout.size {
-                        1 => {
-                            out.push(RV32Inst::Sb { rs1, rs2, imm: 0 });
-                        }
-                        2 => {
-                            out.push(RV32Inst::Sh { rs1, rs2, imm: 0 });
-                        }
-                        4 => {
-                            out.push(RV32Inst::Sw { rs1, rs2, imm: 0 });
+                    match type_layout.layout.size as usize {
+                        1 | 2 | 4 => {
+                            out.push(T::emit_store_mem(rs1, rs2, 0, type_layout.layout.size as usize));
                         }
                         _ => panic!("unsupported store size"),
                     }
@@ -1076,196 +1036,7 @@ impl RV32Lowerer {
                 let rs2 = lower_operand(&operands[1], &mut out, state, machine_function)?;
                 let rd_vreg = machine_function.new_vreg();
                 let rd = Register::Virtual(rd_vreg);
-
-                fn lower_eq(
-                    rd: Register<RV32Reg>,
-                    rs1: Register<RV32Reg>,
-                    rs2: Register<RV32Reg>,
-                    out: &mut Vec<RV32Inst>,
-                    machine_function: &mut MachineFunction<RV32Arch>,
-                ) {
-                    let temp_vreg = machine_function.new_vreg();
-                    let temp_reg = Register::Virtual(temp_vreg);
-                    out.push(RV32Inst::Xor {
-                        rd: temp_reg,
-                        rs1,
-                        rs2,
-                    });
-                    out.push(RV32Inst::Sltiu {
-                        rd,
-                        rs1: temp_reg,
-                        imm: 1,
-                    });
-                }
-
-                fn lower_ne(
-                    rd: Register<RV32Reg>,
-                    rs1: Register<RV32Reg>,
-                    rs2: Register<RV32Reg>,
-                    out: &mut Vec<RV32Inst>,
-                    machine_function: &mut MachineFunction<RV32Arch>,
-                ) {
-                    let temp_vreg = machine_function.new_vreg();
-                    let temp_reg = Register::Virtual(temp_vreg);
-                    out.push(RV32Inst::Xor {
-                        rd: temp_reg,
-                        rs1,
-                        rs2,
-                    });
-                    out.push(RV32Inst::Sltu {
-                        rd,
-                        rs1: Register::Physical(RV32Reg::Zero),
-                        rs2: temp_reg,
-                    });
-                }
-
-                fn lower_unsigned_greater_than(
-                    rd: Register<RV32Reg>,
-                    rs1: Register<RV32Reg>,
-                    rs2: Register<RV32Reg>,
-                    out: &mut Vec<RV32Inst>,
-                    _machine_function: &mut MachineFunction<RV32Arch>,
-                ) {
-                    out.push(RV32Inst::Sltu {
-                        rd,
-                        rs1: rs2,
-                        rs2: rs1,
-                    });
-                }
-
-                fn lower_unsigned_greater_equal(
-                    rd: Register<RV32Reg>,
-                    rs1: Register<RV32Reg>,
-                    rs2: Register<RV32Reg>,
-                    out: &mut Vec<RV32Inst>,
-                    machine_function: &mut MachineFunction<RV32Arch>,
-                ) {
-                    let tmp = Register::Virtual(machine_function.new_vreg());
-                    out.push(RV32Inst::Sltu { rd: tmp, rs1, rs2 });
-                    out.push(RV32Inst::Xori {
-                        rd,
-                        rs1: tmp,
-                        imm: 1,
-                    });
-                }
-
-                fn lower_unsigned_less_than(
-                    rd: Register<RV32Reg>,
-                    rs1: Register<RV32Reg>,
-                    rs2: Register<RV32Reg>,
-                    out: &mut Vec<RV32Inst>,
-                    _machine_function: &mut MachineFunction<RV32Arch>,
-                ) {
-                    out.push(RV32Inst::Sltu { rd, rs1, rs2 });
-                }
-
-                fn lower_unsigned_less_equal(
-                    rd: Register<RV32Reg>,
-                    rs1: Register<RV32Reg>,
-                    rs2: Register<RV32Reg>,
-                    out: &mut Vec<RV32Inst>,
-                    machine_function: &mut MachineFunction<RV32Arch>,
-                ) {
-                    let t1_vreg = machine_function.new_vreg();
-                    let tmp = Register::Virtual(t1_vreg);
-                    lower_unsigned_less_than(tmp, rs2, rs1, out, machine_function);
-                    out.push(RV32Inst::Xori {
-                        rd,
-                        rs1: tmp,
-                        imm: 1,
-                    });
-                }
-
-                fn lower_signed_greater_than(
-                    rd: Register<RV32Reg>,
-                    rs1: Register<RV32Reg>,
-                    rs2: Register<RV32Reg>,
-                    out: &mut Vec<RV32Inst>,
-                    _machine_function: &mut MachineFunction<RV32Arch>,
-                ) {
-                    out.push(RV32Inst::Slt {
-                        rd,
-                        rs1: rs2,
-                        rs2: rs1,
-                    });
-                }
-
-                fn lower_signed_greater_equal(
-                    rd: Register<RV32Reg>,
-                    rs1: Register<RV32Reg>,
-                    rs2: Register<RV32Reg>,
-                    out: &mut Vec<RV32Inst>,
-                    machine_function: &mut MachineFunction<RV32Arch>,
-                ) {
-                    let tmp = Register::Virtual(machine_function.new_vreg());
-                    out.push(RV32Inst::Slt { rd: tmp, rs1, rs2 });
-                    out.push(RV32Inst::Xori {
-                        rd,
-                        rs1: tmp,
-                        imm: 1,
-                    });
-                }
-
-                fn lower_signed_less_than(
-                    rd: Register<RV32Reg>,
-                    rs1: Register<RV32Reg>,
-                    rs2: Register<RV32Reg>,
-                    out: &mut Vec<RV32Inst>,
-                    _machine_function: &mut MachineFunction<RV32Arch>,
-                ) {
-                    out.push(RV32Inst::Slt { rd, rs1, rs2 });
-                }
-
-                fn lower_signed_less_equal(
-                    rd: Register<RV32Reg>,
-                    rs1: Register<RV32Reg>,
-                    rs2: Register<RV32Reg>,
-                    out: &mut Vec<RV32Inst>,
-                    machine_function: &mut MachineFunction<RV32Arch>,
-                ) {
-                    let t1_vreg = machine_function.new_vreg();
-                    let tmp = Register::Virtual(t1_vreg);
-                    lower_signed_less_than(tmp, rs2, rs1, out, machine_function);
-                    out.push(RV32Inst::Xori {
-                        rd,
-                        rs1: tmp,
-                        imm: 1,
-                    });
-                }
-
-                match icmp_code {
-                    ICmpCode::Eq => {
-                        lower_eq(rd, rs1, rs2, &mut out, machine_function);
-                    }
-                    ICmpCode::Ne => {
-                        lower_ne(rd, rs1, rs2, &mut out, machine_function);
-                    }
-                    ICmpCode::Ugt => {
-                        lower_unsigned_greater_than(rd, rs1, rs2, &mut out, machine_function)
-                    }
-                    ICmpCode::Uge => {
-                        lower_unsigned_greater_equal(rd, rs1, rs2, &mut out, machine_function)
-                    }
-                    ICmpCode::Ult => {
-                        lower_unsigned_less_than(rd, rs1, rs2, &mut out, machine_function)
-                    }
-                    ICmpCode::Ule => {
-                        lower_unsigned_less_equal(rd, rs1, rs2, &mut out, machine_function)
-                    }
-                    ICmpCode::Sgt => {
-                        lower_signed_greater_than(rd, rs1, rs2, &mut out, machine_function)
-                    }
-                    ICmpCode::Sge => {
-                        lower_signed_greater_equal(rd, rs1, rs2, &mut out, machine_function)
-                    }
-                    ICmpCode::Slt => {
-                        lower_signed_less_than(rd, rs1, rs2, &mut out, machine_function)
-                    }
-                    ICmpCode::Sle => {
-                        lower_signed_less_equal(rd, rs1, rs2, &mut out, machine_function)
-                    }
-                }
-
+                emit_icmp(icmp_code, rd, rs1, rs2, &mut out, machine_function);
                 state.record_vreg(instruction, rd_vreg);
             }
             Phi => {
@@ -1281,44 +1052,41 @@ impl RV32Lowerer {
 
                 let mask1 = machine_function.new_vreg();
                 let mask2 = machine_function.new_vreg();
-                out.push(RV32Inst::Sub {
-                    rd: Register::Virtual(mask1),
-                    rs1: Register::Physical(RV32Reg::Zero),
-                    rs2: cond,
-                });
-                out.push(RV32Inst::Xori {
-                    rd: Register::Virtual(mask2),
-                    rs1: Register::Virtual(mask1),
-                    imm: -1,
-                });
+                out.push(T::emit_sub(
+                    Register::Virtual(mask1),
+                    Register::Physical(T::zero_reg()),
+                    cond,
+                ));
+                out.push(T::emit_xori(
+                    Register::Virtual(mask2),
+                    Register::Virtual(mask1),
+                    -1,
+                ));
 
                 let true_part = machine_function.new_vreg();
                 let false_part = machine_function.new_vreg();
-                out.push(RV32Inst::And {
-                    rd: Register::Virtual(true_part),
-                    rs1: true_val,
-                    rs2: Register::Virtual(mask1),
-                });
-                out.push(RV32Inst::And {
-                    rd: Register::Virtual(false_part),
-                    rs1: false_val,
-                    rs2: Register::Virtual(mask2),
-                });
+                out.push(T::emit_and(
+                    Register::Virtual(true_part),
+                    true_val,
+                    Register::Virtual(mask1),
+                ));
+                out.push(T::emit_and(
+                    Register::Virtual(false_part),
+                    false_val,
+                    Register::Virtual(mask2),
+                ));
                 let rd_vreg = machine_function.new_vreg();
-                out.push(RV32Inst::Or {
-                    rd: Register::Virtual(rd_vreg),
-                    rs1: Register::Virtual(true_part),
-                    rs2: Register::Virtual(false_part),
-                });
+                out.push(T::emit_or(
+                    Register::Virtual(rd_vreg),
+                    Register::Virtual(true_part),
+                    Register::Virtual(false_part),
+                ));
                 state.record_vreg(instruction, rd_vreg);
             }
             PtrToInt => {
                 let src = lower_operand(&operands[0], &mut out, state, machine_function)?;
                 let rd_vreg = machine_function.new_vreg();
-                out.push(RV32Inst::Mv {
-                    rd: Register::Virtual(rd_vreg),
-                    rs: src,
-                });
+                out.push(T::MachineInst::mv(Register::Virtual(rd_vreg), src));
                 state.record_vreg(instruction, rd_vreg);
             }
             Trunc => {
@@ -1347,22 +1115,15 @@ impl RV32Lowerer {
                 let rd_vreg = machine_function.new_vreg();
                 let src_bits = operands[0].get_type().as_int().unwrap().0;
                 if src_bits >= 32 {
-                    out.push(RV32Inst::Mv {
-                        rd: Register::Virtual(rd_vreg),
-                        rs: src,
-                    });
+                    out.push(T::MachineInst::mv(Register::Virtual(rd_vreg), src));
                 } else {
                     let shift = 32 - src_bits;
-                    out.push(RV32Inst::Slli {
-                        rd: Register::Virtual(rd_vreg),
-                        rs1: src,
-                        imm: shift as i32,
-                    });
-                    out.push(RV32Inst::Srai {
-                        rd: Register::Virtual(rd_vreg),
-                        rs1: Register::Virtual(rd_vreg),
-                        imm: shift as i32,
-                    });
+                    out.push(T::emit_slli(Register::Virtual(rd_vreg), src, shift as i32));
+                    out.push(T::emit_srai(
+                        Register::Virtual(rd_vreg),
+                        Register::Virtual(rd_vreg),
+                        shift as i32,
+                    ));
                 }
                 state.record_vreg(instruction, rd_vreg);
             }
@@ -1373,7 +1134,7 @@ impl RV32Lowerer {
 
     fn ensure_symbol_absent(
         &self,
-        machine_module: &MachineModule<RV32Arch>,
+        machine_module: &MachineModule<T>,
         name: &str,
     ) -> Result<(), LowerError> {
         if machine_module.symbol_map.contains_key(name) {
@@ -1386,7 +1147,7 @@ impl RV32Lowerer {
     fn initialize_func_arguments(
         &self,
         function: &FunctionPtr,
-        machine_function: &mut MachineFunction<RV32Arch>,
+        machine_function: &mut MachineFunction<T>,
         state: &mut FunctionLoweringState,
     ) {
         let params = &function.as_function().params;
@@ -1397,16 +1158,16 @@ impl RV32Lowerer {
             .map(|(index, param)| {
                 let vreg = machine_function.new_vreg();
                 state.record_vreg(param, vreg);
-                if index < 8 {
-                    RV32Inst::Mv {
-                        rd: Register::Virtual(vreg),
-                        rs: Register::Physical(RV32Reg::reg_a(index)),
-                    }
+                if index < T::num_arg_regs() {
+                    T::MachineInst::mv(
+                        Register::Virtual(vreg),
+                        Register::Physical(T::arg_reg(index)),
+                    )
                 } else {
-                    RV32Inst::LoadIncomingArg {
-                        rd: Register::Virtual(vreg),
-                        offset: ((index - 8) * 4) as i32,
-                    }
+                    T::emit_load_incoming_arg(
+                        Register::Virtual(vreg),
+                        T::stack_arg_offset(index - T::num_arg_regs()),
+                    )
                 }
             })
             .collect();
@@ -1419,7 +1180,7 @@ impl RV32Lowerer {
     }
 }
 
-fn empty_machine_function(name: String) -> MachineFunction<RV32Arch> {
+fn empty_machine_function<T: TargetArch>(name: String) -> MachineFunction<T> {
     MachineFunction {
         name,
         blocks: Vec::new(),

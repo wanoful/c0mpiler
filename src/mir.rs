@@ -36,6 +36,179 @@ pub trait TargetInst {
         Self: Sized;    
 }
 
+pub trait LoweringTarget: TargetArch + Default {
+    fn zero_reg() -> Self::PhysicalReg;
+    fn return_reg() -> Self::PhysicalReg;
+    fn arg_reg(index: usize) -> Self::PhysicalReg;
+    fn num_arg_regs() -> usize;
+    fn stack_arg_size() -> usize;
+    fn stack_arg_offset(stack_index: usize) -> i32;
+
+    fn emit_add(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst;
+    fn emit_sub(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst;
+    fn emit_xor(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst;
+    fn emit_or(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst;
+    fn emit_and(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst;
+    fn emit_sll(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst;
+    fn emit_srl(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst;
+    fn emit_sra(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst;
+    fn emit_slt(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst;
+    fn emit_sltu(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst;
+    fn emit_mul(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst;
+    fn emit_div(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst;
+    fn emit_divu(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst;
+    fn emit_rem(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst;
+    fn emit_remu(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst;
+
+    fn emit_addi(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        imm: i32,
+    ) -> Self::MachineInst;
+    fn emit_xori(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        imm: i32,
+    ) -> Self::MachineInst;
+    fn emit_ori(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        imm: i32,
+    ) -> Self::MachineInst;
+    fn emit_andi(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        imm: i32,
+    ) -> Self::MachineInst;
+    fn emit_slli(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        imm: i32,
+    ) -> Self::MachineInst;
+    fn emit_srli(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        imm: i32,
+    ) -> Self::MachineInst;
+    fn emit_srai(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        imm: i32,
+    ) -> Self::MachineInst;
+    fn emit_sltiu(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        imm: i32,
+    ) -> Self::MachineInst;
+
+    fn emit_branch_ne(
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+        label: BlockId,
+    ) -> Self::MachineInst;
+    fn emit_jump(label: BlockId) -> Self::MachineInst;
+    fn emit_call(func: SymbolId, num_args: usize) -> Self::MachineInst;
+    fn emit_ret() -> Self::MachineInst;
+
+    fn emit_load_mem(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        imm: i32,
+        size: usize,
+        unsigned: bool,
+    ) -> Self::MachineInst;
+    fn emit_load_global(
+        rd: Register<Self::PhysicalReg>,
+        symbol: SymbolId,
+        size: usize,
+        unsigned: bool,
+    ) -> Self::MachineInst;
+    fn emit_store_mem(
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+        imm: i32,
+        size: usize,
+    ) -> Self::MachineInst;
+    fn emit_store_global(
+        rs: Register<Self::PhysicalReg>,
+        symbol: SymbolId,
+        size: usize,
+    ) -> Self::MachineInst;
+
+    fn emit_store_outgoing_arg(
+        rs: Register<Self::PhysicalReg>,
+        offset: i32,
+    ) -> Self::MachineInst;
+    fn emit_load_incoming_arg(
+        rd: Register<Self::PhysicalReg>,
+        offset: i32,
+    ) -> Self::MachineInst;
+    fn emit_get_stack_addr(
+        rd: Register<Self::PhysicalReg>,
+        slot: StackSlotId,
+    ) -> Self::MachineInst;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BlockId(pub usize);
 

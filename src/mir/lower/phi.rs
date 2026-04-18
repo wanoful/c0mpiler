@@ -1,9 +1,8 @@
 use crate::{
     ir::ir_value::ValuePtr,
     mir::{
-        BlockId, MachineFunction, VRegId,
-        lower::{FunctionLoweringState, LowerError, RV32Lowerer},
-        rv32im::RV32Arch,
+        BlockId, LoweringTarget, MachineFunction, VRegId,
+        lower::{FunctionLoweringState, LowerError, Lowerer},
     },
 };
 
@@ -35,10 +34,10 @@ impl PhiInfo {
     }
 }
 
-impl RV32Lowerer {
+impl<T: LoweringTarget> Lowerer<T> {
     pub(super) fn collect_phis(
         &mut self,
-        machine_function: &mut MachineFunction<RV32Arch>,
+        machine_function: &mut MachineFunction<T>,
         state: &mut FunctionLoweringState,
     ) -> Result<(), LowerError> {
         for block in state.block_order.clone().iter() {
