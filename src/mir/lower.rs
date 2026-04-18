@@ -14,10 +14,14 @@ use crate::{
         ir_value::{
             BasicBlockPtr, Constant, ConstantArray, ConstantInt, ConstantPtr, ConstantString,
             ConstantStruct, ICmpCode, InstructionPtr, Value, ValueKind, ValuePtr,
-        }, layout::LayoutShape,
+        },
+        layout::LayoutShape,
     },
     mir::{
-        BlockId, FrameInfo, FrameLayout, Linkage, MachineBlock, MachineFunction, MachineModule, MachineSegment, MachineSymbolKind, Register, StackSlotId, SymbolId, VRegId, lower::phi::PhiInfo, rv32im::{RV32Arch, RV32Inst, RV32Reg}
+        BlockId, FrameInfo, FrameLayout, Linkage, MachineBlock, MachineFunction, MachineModule,
+        MachineSegment, MachineSymbolKind, Register, StackSlotId, SymbolId, VRegId,
+        lower::phi::PhiInfo,
+        rv32im::{RV32Arch, RV32Inst, RV32Reg},
     },
 };
 
@@ -394,6 +398,7 @@ impl RV32Lowerer {
         for instruction in instructions.iter() {
             let insts = self.lower_instruction(
                 instruction,
+                block_id,
                 module,
                 machine_function,
                 machine_module,
@@ -412,6 +417,7 @@ impl RV32Lowerer {
     fn lower_instruction(
         &mut self,
         instruction: &InstructionPtr,
+        block_id: BlockId,
         module: &LLVMModule,
         machine_function: &mut MachineFunction<RV32Arch>,
         machine_module: &mut MachineModule<RV32Arch>,
@@ -580,20 +586,82 @@ impl RV32Lowerer {
                 }
             }
             Branch { has_cond } => {
+                let collect_phis_from_info = |inner: &Vec<PhiInfo>| {
+                    inner
+                        .iter()
+                        .filter_map(|info| {
+                            info.filter_pred(block_id)
+                                .map(|ptr| (info.get_dst(), ptr.clone()))
+                        })
+                        .collect()
+                };
+
                 if *has_cond {
                     let cond = lower_operand(&operands[0], &mut out, state, machine_function)?;
-                    let true_block_id = state
+                    let mut true_block_id = state
                         .block_id(&BasicBlockPtr(operands[1].clone()))
                         .ok_or_else(|| LowerError::UnknownBlock {
                             function: state.function_name.clone(),
                             block_name: operands[1].get_name(),
                         })?;
-                    let false_block_id = state
+                    let mut false_block_id = state
                         .block_id(&BasicBlockPtr(operands[2].clone()))
                         .ok_or_else(|| LowerError::UnknownBlock {
                             function: state.function_name.clone(),
                             block_name: operands[2].get_name(),
                         })?;
+
+                    let true_block_phis: Option<Vec<_>> = state
+                        .phi_infos
+                        .get(&true_block_id)
+                        .map(collect_phis_from_info);
+                    let false_block_phis: Option<Vec<_>> = state
+                        .phi_infos
+                        .get(&false_block_id)
+                        .map(collect_phis_from_info);
+
+                    let mut add_transit_block =
+                        |target_block_id: BlockId, target_block_phis: Vec<(VRegId, ValuePtr)>| {
+                            let transit_block_id = machine_function.blocks.len();
+                            let mut transit_insts: Vec<RV32Inst> = Vec::new();
+
+                            for (dst, value) in target_block_phis.iter() {
+                                let src = lower_operand(
+                                    value,
+                                    &mut transit_insts,
+                                    state,
+                                    machine_function,
+                                )?;
+                                transit_insts.push(RV32Inst::Mv {
+                                    rd: Register::Virtual(*dst),
+                                    rs: src,
+                                });
+                            }
+                            transit_insts.push(RV32Inst::Jal {
+                                rd: Register::Physical(RV32Reg::Zero),
+                                label: target_block_id,
+                            });
+                            let transit_block = MachineBlock {
+                                id: BlockId(transit_block_id),
+                                name: format!(".bb{transit_block_id}"),
+                                instructions: transit_insts,
+                            };
+                            machine_function.blocks.push(transit_block);
+                            Ok(BlockId(transit_block_id))
+                        };
+
+                    if let Some(true_block_phis) = &true_block_phis
+                        && !true_block_phis.is_empty()
+                    {
+                        true_block_id = add_transit_block(true_block_id, true_block_phis.clone())?;
+                    };
+
+                    if let Some(false_block_phis) = &false_block_phis
+                        && !false_block_phis.is_empty()
+                    {
+                        false_block_id =
+                            add_transit_block(false_block_id, false_block_phis.clone())?;
+                    };
 
                     out.push(RV32Inst::Bne {
                         rs1: cond,
@@ -611,6 +679,22 @@ impl RV32Lowerer {
                             function: state.function_name.clone(),
                             block_name: operands[0].get_name(),
                         })?;
+
+                    let target_block_phis: Option<Vec<_>> = state
+                        .phi_infos
+                        .get(&target_block_id)
+                        .map(collect_phis_from_info);
+
+                    if let Some(target_block_phis) = &target_block_phis {
+                        for (dst, value) in target_block_phis {
+                            let src = lower_operand(value, &mut out, state, machine_function)?;
+                            out.push(RV32Inst::Mv {
+                                rd: Register::Virtual(*dst),
+                                rs: src,
+                            });
+                        }
+                    };
+
                     out.push(RV32Inst::Jal {
                         rd: Register::Physical(RV32Reg::Zero),
                         label: target_block_id,
@@ -710,14 +794,14 @@ impl RV32Lowerer {
                             let field_index =
                                 if let ValueKind::Constant(Constant::ConstantInt(number)) =
                                     &index.kind
-                            {
-                                number.0 as usize
-                            } else {
-                                return Err(LowerError::UnimplementedInstruction {
-                                    function: state.function_name.clone(),
-                                    opcode: "non-constant struct GEP index".to_string(),
-                                });
-                            };
+                                {
+                                    number.0 as usize
+                                } else {
+                                    return Err(LowerError::UnimplementedInstruction {
+                                        function: state.function_name.clone(),
+                                        opcode: "non-constant struct GEP index".to_string(),
+                                    });
+                                };
                             let field_layout = &struct_layout.fields[field_index];
                             let temp_vreg = machine_function.new_vreg();
                             let temp_reg = Register::Virtual(temp_vreg);
@@ -758,7 +842,7 @@ impl RV32Lowerer {
                             return Err(LowerError::UnimplementedInstruction {
                                 function: state.function_name.clone(),
                                 opcode: "GEP on non-struct non-array type".to_string(),
-                            })
+                            });
                         }
                     }
                 }
@@ -969,11 +1053,7 @@ impl RV32Lowerer {
                     machine_function: &mut MachineFunction<RV32Arch>,
                 ) {
                     let tmp = Register::Virtual(machine_function.new_vreg());
-                    out.push(RV32Inst::Sltu {
-                        rd: tmp,
-                        rs1,
-                        rs2,
-                    });
+                    out.push(RV32Inst::Sltu { rd: tmp, rs1, rs2 });
                     out.push(RV32Inst::Xori {
                         rd,
                         rs1: tmp,
@@ -1030,11 +1110,7 @@ impl RV32Lowerer {
                     machine_function: &mut MachineFunction<RV32Arch>,
                 ) {
                     let tmp = Register::Virtual(machine_function.new_vreg());
-                    out.push(RV32Inst::Slt {
-                        rd: tmp,
-                        rs1,
-                        rs2,
-                    });
+                    out.push(RV32Inst::Slt { rd: tmp, rs1, rs2 });
                     out.push(RV32Inst::Xori {
                         rd,
                         rs1: tmp,
@@ -1105,8 +1181,11 @@ impl RV32Lowerer {
                 state.record_vreg(instruction, rd_vreg);
             }
             Phi => {
-                return Err(LowerError::UnimplementedInstruction { function: state.function_name.clone(), opcode: "Phi should be removed at this point".to_string() })
-            },
+                assert!(
+                    state.vreg_for_value(instruction).is_some(),
+                    "phi node should have been assigned a vreg in the first pass"
+                );
+            }
             Select => {
                 let cond = lower_operand(&operands[0], &mut out, state, machine_function)?;
                 let true_val = lower_operand(&operands[1], &mut out, state, machine_function)?;

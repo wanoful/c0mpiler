@@ -1,11 +1,7 @@
 use crate::{
-    ir::{
-        LLVMModule,
-        globalxxx::FunctionPtr,
-        ir_value::{InstructionPtr, ValuePtr},
-    },
+    ir::ir_value::ValuePtr,
     mir::{
-        BlockId, MachineFunction, MachineModule, VRegId,
+        BlockId, MachineFunction, VRegId,
         lower::{FunctionLoweringState, LowerError, RV32Lowerer},
         rv32im::RV32Arch,
     },
@@ -19,10 +15,24 @@ pub(super) struct PhiIncoming {
 
 #[derive(Debug)]
 pub(super) struct PhiInfo {
-    block: BlockId,
-    phi_inst: InstructionPtr,
     dst: VRegId,
     incomings: Vec<PhiIncoming>,
+}
+
+impl PhiInfo {
+    pub(super) fn get_dst(&self) -> VRegId {
+        self.dst
+    }
+
+    pub(super) fn filter_pred(&self, pred: BlockId) -> Option<&ValuePtr> {
+        self.incomings.iter().find_map(|incoming| {
+            if incoming.pred == pred {
+                Some(&incoming.value)
+            } else {
+                None
+            }
+        })
+    }
 }
 
 impl RV32Lowerer {
@@ -58,12 +68,7 @@ impl RV32Lowerer {
                         .collect();
                     let dst = machine_function.new_vreg();
                     state.record_vreg(ptr, dst);
-                    Some(PhiInfo {
-                        block: block_id,
-                        phi_inst: ptr.clone(),
-                        dst,
-                        incomings,
-                    })
+                    Some(PhiInfo { dst, incomings })
                 })
                 .collect();
             state.phi_infos.insert(block_id, phi_infos);
