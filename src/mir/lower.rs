@@ -335,7 +335,7 @@ struct ModuleLoweringState {
 }
 
 #[derive(Debug)]
-struct FunctionLoweringState {
+pub(crate) struct FunctionLoweringState {
     function_name: String,
     block_map: HashMap<*const Value, BlockId>,
     block_order: Vec<BasicBlockPtr>,
@@ -1191,9 +1191,9 @@ impl<T: LoweringTarget> Lowerer<T> {
             .append(&mut insts);
     }
 
-    fn liveness_analysis(&self, machine_function: &mut MachineFunction<T>) -> LivenessInfo<T> {
+    pub(crate) fn liveness_analysis(&self, machine_function: &MachineFunction<T>) -> LivenessInfo<T> {
         let mut liveness_info: LivenessInfo<T> = LivenessInfo::new(machine_function.blocks.iter());
-        let mut cfg = self.compute_cfg(machine_function);
+        let cfg = self.compute_cfg(machine_function);
 
         let mut changed = true;
 
@@ -1210,7 +1210,7 @@ impl<T: LoweringTarget> Lowerer<T> {
         liveness_info
     }
 
-    fn compute_cfg(&self, machine_function: &MachineFunction<T>) -> ControlFlowGraph {
+    pub(crate) fn compute_cfg(&self, machine_function: &MachineFunction<T>) -> ControlFlowGraph {
         let mut preds: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
         let mut succs: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
 

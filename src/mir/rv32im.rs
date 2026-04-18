@@ -9,6 +9,14 @@ pub struct RV32Arch;
 impl TargetArch for RV32Arch {
     type PhysicalReg = RV32Reg;
     type MachineInst = RV32Inst;
+
+    fn get_allocatable_regs() -> Vec<Self::PhysicalReg> {
+        use RV32Reg::*;
+        vec![
+            T0, T1, T2, T3, T4, T5, T6, S0, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, A0, A1,
+            A2, A3, A4, A5, A6, A7,
+        ]
+    }
 }
 
 impl Default for RV32Arch {

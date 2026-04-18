@@ -1,5 +1,6 @@
 pub mod lower;
 pub mod rv32im;
+pub mod regalloc;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -10,6 +11,8 @@ use std::{
 pub trait TargetArch: Clone + 'static {
     type PhysicalReg: Clone + Copy + PartialEq + Eq + Hash + Debug;
     type MachineInst: TargetInst<PhysicalReg = Self::PhysicalReg> + Clone + Debug;
+
+    fn get_allocatable_regs() -> Vec<Self::PhysicalReg>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -422,8 +425,9 @@ impl<T: TargetArch> LivenessInfo<T> {
         }
     }
 
-    pub fn get_live_after(&self, loc: InstLocation) -> Option<&HashSet<Register<T::PhysicalReg>>> {
-        self.live_after.get(&loc)
+    pub fn get_live_after(&self, block_id: BlockId, inst_index: usize) -> &HashSet<Register<T::PhysicalReg>> {
+        let loc = InstLocation { block_id, inst_index };
+        &self.live_after[&loc]
     }
 
     pub fn update_livein(&mut self, block_id: BlockId) -> bool {
