@@ -1,5 +1,6 @@
-use crate::mir::{
-    BlockId, LoweringTarget, Register, StackSlotId, SymbolId, TargetArch, TargetInst,
+use crate::{
+    impossible,
+    mir::{BlockId, LoweringTarget, Register, StackSlotId, SymbolId, TargetArch, TargetInst},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -305,6 +306,22 @@ impl TargetInst for RV32Inst {
     {
         RV32Inst::Mv { rd, rs }
     }
+
+    fn get_successors(&self) -> Vec<BlockId> {
+        match self {
+            RV32Inst::Beq { label, .. }
+            | RV32Inst::Bne { label, .. }
+            | RV32Inst::Blt { label, .. }
+            | RV32Inst::Bge { label, .. }
+            | RV32Inst::Bltu { label, .. }
+            | RV32Inst::Bgeu { label, .. } => vec![*label],
+            RV32Inst::Jal { label, .. } => vec![*label],
+            RV32Inst::Jalr { .. } => impossible!(),
+            RV32Inst::Ret => vec![],
+            RV32Inst::Tail { .. } => vec![],
+            _ => vec![],
+        }
+    }
 }
 
 impl LoweringTarget for RV32Arch {
@@ -443,7 +460,13 @@ impl LoweringTarget for RV32Arch {
         RV32Inst::Ret
     }
 
-    fn emit_load_mem(rd: Reg, rs1: Reg, imm: i32, size: usize, unsigned: bool) -> Self::MachineInst {
+    fn emit_load_mem(
+        rd: Reg,
+        rs1: Reg,
+        imm: i32,
+        size: usize,
+        unsigned: bool,
+    ) -> Self::MachineInst {
         match (size, unsigned) {
             (1, false) => RV32Inst::Lb { rd, rs1, imm },
             (1, true) => RV32Inst::Lbu { rd, rs1, imm },
@@ -454,7 +477,12 @@ impl LoweringTarget for RV32Arch {
         }
     }
 
-    fn emit_load_global(rd: Reg, symbol: SymbolId, size: usize, unsigned: bool) -> Self::MachineInst {
+    fn emit_load_global(
+        rd: Reg,
+        symbol: SymbolId,
+        size: usize,
+        unsigned: bool,
+    ) -> Self::MachineInst {
         match (size, unsigned) {
             (1, false) => RV32Inst::Lbs { rd, symbol },
             (2, false) => RV32Inst::Lhs { rd, symbol },

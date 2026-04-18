@@ -1,7 +1,11 @@
-pub mod rv32im;
 pub mod lower;
+pub mod rv32im;
 
-use std::{collections::HashMap, fmt::Debug, hash::Hash};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Debug,
+    hash::Hash,
+};
 
 pub trait TargetArch: Clone + 'static {
     type PhysicalReg: Clone + Copy + PartialEq + Eq + Hash + Debug;
@@ -26,6 +30,7 @@ pub trait TargetInst {
     fn def_regs(&self) -> Vec<Register<Self::PhysicalReg>>;
     fn use_regs(&self) -> Vec<Register<Self::PhysicalReg>>;
     fn is_terminator(&self) -> bool;
+    fn get_successors(&self) -> Vec<BlockId>;
 
     fn load_imm(rd: Register<Self::PhysicalReg>, imm: i32) -> Self
     where
@@ -33,7 +38,7 @@ pub trait TargetInst {
 
     fn mv(rd: Register<Self::PhysicalReg>, rs: Register<Self::PhysicalReg>) -> Self
     where
-        Self: Sized;    
+        Self: Sized;
 }
 
 pub trait LoweringTarget: TargetArch + Default {
@@ -195,18 +200,10 @@ pub trait LoweringTarget: TargetArch + Default {
         size: usize,
     ) -> Self::MachineInst;
 
-    fn emit_store_outgoing_arg(
-        rs: Register<Self::PhysicalReg>,
-        offset: i32,
-    ) -> Self::MachineInst;
-    fn emit_load_incoming_arg(
-        rd: Register<Self::PhysicalReg>,
-        offset: i32,
-    ) -> Self::MachineInst;
-    fn emit_get_stack_addr(
-        rd: Register<Self::PhysicalReg>,
-        slot: StackSlotId,
-    ) -> Self::MachineInst;
+    fn emit_store_outgoing_arg(rs: Register<Self::PhysicalReg>, offset: i32) -> Self::MachineInst;
+    fn emit_load_incoming_arg(rd: Register<Self::PhysicalReg>, offset: i32) -> Self::MachineInst;
+    fn emit_get_stack_addr(rd: Register<Self::PhysicalReg>, slot: StackSlotId)
+    -> Self::MachineInst;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -362,4 +359,113 @@ impl<T: TargetArch> MachineModule<T> {
         });
         id
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct InstLocation {
+    pub block_id: BlockId,
+    pub inst_index: usize,
+}
+
+#[derive(Debug)]
+pub struct LivenessInfo<T: TargetArch> {
+    uses: HashMap<BlockId, HashSet<Register<T::PhysicalReg>>>,
+    defs: HashMap<BlockId, HashSet<Register<T::PhysicalReg>>>,
+
+    pub live_in: HashMap<BlockId, HashSet<Register<T::PhysicalReg>>>,
+    pub live_out: HashMap<BlockId, HashSet<Register<T::PhysicalReg>>>,
+
+    pub live_after: HashMap<InstLocation, HashSet<Register<T::PhysicalReg>>>,
+}
+
+impl<T: TargetArch> LivenessInfo<T> {
+    pub fn new<'a, C>(blocks: C) -> Self
+    where
+        C: IntoIterator<Item = &'a MachineBlock<T>>,
+    {
+        let mut all_uses = HashMap::new();
+        let mut all_defs = HashMap::new();
+
+        for block in blocks {
+            let (uses, defs) = block.instructions.iter().fold(
+                (HashSet::new(), HashSet::new()),
+                |(mut uses, mut defs), inst| {
+                    uses.extend(inst.use_regs().into_iter().filter(|r| !defs.contains(r)));
+                    defs.extend(inst.def_regs());
+                    (uses, defs)
+                },
+            );
+            all_uses.insert(block.id, uses);
+            all_defs.insert(block.id, defs);
+        }
+
+        LivenessInfo {
+            uses: all_uses,
+            defs: all_defs,
+            live_in: HashMap::new(),
+            live_out: HashMap::new(),
+            live_after: HashMap::new(),
+        }
+    }
+
+    pub fn compute_live_after(&mut self, machine_function: &MachineFunction<T>) {
+        for block in &machine_function.blocks {
+            let mut live = self.live_out.get(&block.id).cloned().unwrap_or_default();
+            for (inst_index, inst) in block.instructions.iter().enumerate().rev() {
+                let loc = InstLocation {block_id: block.id, inst_index};
+                self.live_after.insert(loc, live.clone());
+                let mut use_i = HashSet::from_iter(inst.use_regs());
+                let def_i = HashSet::from_iter(inst.def_regs());
+                use_i.extend(live.difference(&def_i));
+                live = use_i;
+            }
+        }
+    }
+
+    pub fn get_live_after(&self, loc: InstLocation) -> Option<&HashSet<Register<T::PhysicalReg>>> {
+        self.live_after.get(&loc)
+    }
+
+    pub fn update_livein(&mut self, block_id: BlockId) -> bool {
+        let live_out = self.live_out.entry(block_id).or_default();
+        let live_in = self.live_in.entry(block_id).or_default();
+        let uses = self.uses.entry(block_id).or_default();
+        let defs = self.defs.entry(block_id).or_default();
+
+        let mut new_live_in = uses.clone();
+        new_live_in.extend(live_out.difference(defs));
+
+        if new_live_in != *live_in {
+            *live_in = new_live_in;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn update_liveout<'a, C>(&mut self, block_id: BlockId, succs: C) -> bool
+    where
+        C: IntoIterator<Item = &'a BlockId>,
+    {
+        let live_out = self.live_out.entry(block_id).or_default();
+
+        let new_live_out = succs
+            .into_iter()
+            .filter_map(|succ| self.live_in.get(succ))
+            .fold(HashSet::new(), |acc, live_in| {
+                acc.union(live_in).cloned().collect()
+            });
+
+        if new_live_out != *live_out {
+            *live_out = new_live_out;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+struct ControlFlowGraph {
+    pub succs: HashMap<BlockId, HashSet<BlockId>>,
+    pub preds: HashMap<BlockId, HashSet<BlockId>>,
 }

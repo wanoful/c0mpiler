@@ -4,6 +4,7 @@ use std::{
     collections::{HashMap, HashSet},
     error::Error,
     fmt::{self, Display, Formatter},
+    iter,
     marker::PhantomData,
     rc::Rc,
 };
@@ -19,9 +20,9 @@ use crate::{
         layout::LayoutShape,
     },
     mir::{
-        BlockId, FrameInfo, FrameLayout, Linkage, MachineBlock, MachineFunction, MachineModule,
-        MachineSegment, MachineSymbolKind, LoweringTarget, Register, StackSlotId, SymbolId,
-        TargetArch, VRegId, lower::phi::PhiInfo,
+        BlockId, ControlFlowGraph, FrameInfo, FrameLayout, Linkage, LivenessInfo, LoweringTarget,
+        MachineBlock, MachineFunction, MachineModule, MachineSegment, MachineSymbolKind, Register,
+        StackSlotId, SymbolId, TargetArch, VRegId, lower::phi::PhiInfo,
     },
 };
 
@@ -402,10 +403,7 @@ impl<T: LoweringTarget> Lowerer<T> {
         }
     }
 
-    pub fn lower_module(
-        &mut self,
-        module: &LLVMModule,
-    ) -> Result<MachineModule<T>, LowerError> {
+    pub fn lower_module(&mut self, module: &LLVMModule) -> Result<MachineModule<T>, LowerError> {
         let mut machine_module = MachineModule::default();
         let mut module_state = ModuleLoweringState::default();
 
@@ -746,13 +744,17 @@ impl<T: LoweringTarget> Lowerer<T> {
                 let func_id = machine_module.symbol_map[&operands[0].get_name().unwrap()];
                 let args = &operands[1..];
                 let num_args = args.len();
-                let stack_arg_size = num_args.saturating_sub(T::num_arg_regs()) * T::stack_arg_size();
+                let stack_arg_size =
+                    num_args.saturating_sub(T::num_arg_regs()) * T::stack_arg_size();
                 machine_function.record_outgoing_arg(stack_arg_size);
 
                 for (index, arg) in args.iter().enumerate() {
                     let rs = lower_operand(arg, &mut out, state, machine_function)?;
                     if index < T::num_arg_regs() {
-                        out.push(T::MachineInst::mv(Register::Physical(T::arg_reg(index)), rs));
+                        out.push(T::MachineInst::mv(
+                            Register::Physical(T::arg_reg(index)),
+                            rs,
+                        ));
                     } else {
                         out.push(T::emit_store_outgoing_arg(
                             rs,
@@ -904,11 +906,7 @@ impl<T: LoweringTarget> Lowerer<T> {
                             let field_layout = &struct_layout.fields[field_index];
                             let temp_reg = Register::Virtual(machine_function.new_vreg());
                             if field_layout.offset <= 2047 {
-                                out.push(T::emit_addi(
-                                    temp_reg,
-                                    base,
-                                    field_layout.offset as i32,
-                                ));
+                                out.push(T::emit_addi(temp_reg, base, field_layout.offset as i32));
                             } else {
                                 let imm_reg = Register::Virtual(machine_function.new_vreg());
                                 out.push(T::MachineInst::load_imm(
@@ -986,7 +984,12 @@ impl<T: LoweringTarget> Lowerer<T> {
                 match type_layout.layout.size as usize {
                     1 | 2 | 4 => {
                         if let Some(symbol_id) = symbol_id {
-                            out.push(T::emit_load_global(rd, symbol_id, type_layout.layout.size as usize, false));
+                            out.push(T::emit_load_global(
+                                rd,
+                                symbol_id,
+                                type_layout.layout.size as usize,
+                                false,
+                            ));
                         } else {
                             out.push(T::emit_load_mem(
                                 rd,
@@ -1017,7 +1020,11 @@ impl<T: LoweringTarget> Lowerer<T> {
                     let symbol = machine_module.symbol_map[&name];
                     match type_layout.layout.size as usize {
                         1 | 2 | 4 => {
-                            out.push(T::emit_store_global(rs2, symbol, type_layout.layout.size as usize));
+                            out.push(T::emit_store_global(
+                                rs2,
+                                symbol,
+                                type_layout.layout.size as usize,
+                            ));
                         }
                         _ => panic!("unsupported store size"),
                     }
@@ -1025,7 +1032,12 @@ impl<T: LoweringTarget> Lowerer<T> {
                     let rs1 = lower_operand(addr, &mut out, state, machine_function)?;
                     match type_layout.layout.size as usize {
                         1 | 2 | 4 => {
-                            out.push(T::emit_store_mem(rs1, rs2, 0, type_layout.layout.size as usize));
+                            out.push(T::emit_store_mem(
+                                rs1,
+                                rs2,
+                                0,
+                                type_layout.layout.size as usize,
+                            ));
                         }
                         _ => panic!("unsupported store size"),
                     }
@@ -1178,6 +1190,49 @@ impl<T: LoweringTarget> Lowerer<T> {
             .instructions
             .append(&mut insts);
     }
+
+    fn liveness_analysis(&self, machine_function: &mut MachineFunction<T>) -> LivenessInfo<T> {
+        let mut liveness_info: LivenessInfo<T> = LivenessInfo::new(machine_function.blocks.iter());
+        let mut cfg = self.compute_cfg(machine_function);
+
+        let mut changed = true;
+
+        while changed {
+            changed = false;
+            for block in machine_function.blocks.iter().rev() {
+                let succs = &cfg.succs[&block.id];
+                changed |= liveness_info.update_liveout(block.id, succs.iter());
+                changed |= liveness_info.update_livein(block.id);
+            }
+        }
+
+        liveness_info.compute_live_after(machine_function);
+        liveness_info
+    }
+
+    fn compute_cfg(&self, machine_function: &MachineFunction<T>) -> ControlFlowGraph {
+        let mut preds: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
+        let mut succs: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
+
+        for block in machine_function.blocks.iter() {
+            preds.entry(block.id).or_default();
+            succs.entry(block.id).or_default();
+        }
+
+        for block in machine_function.blocks.iter() {
+            for inst in block.instructions.iter().rev() {
+                if !inst.is_terminator() {
+                    break;
+                }
+                inst.get_successors().into_iter().for_each(|succ| {
+                    preds.entry(succ).or_default().insert(block.id);
+                    succs.entry(block.id).or_default().insert(succ);
+                });
+            }
+        }
+
+        ControlFlowGraph { succs, preds }
+    }
 }
 
 fn empty_machine_function<T: TargetArch>(name: String) -> MachineFunction<T> {
@@ -1203,8 +1258,8 @@ fn empty_machine_function<T: TargetArch>(name: String) -> MachineFunction<T> {
 #[cfg(test)]
 mod tests {
     use super::{empty_machine_function, resolve_parallel_copy};
-    use crate::mir::{Register, VRegId};
     use crate::mir::rv32im::{RV32Arch, RV32Inst};
+    use crate::mir::{Register, VRegId};
     use std::collections::HashMap;
 
     fn run_virtual_moves(
@@ -1241,7 +1296,8 @@ mod tests {
         );
 
         assert_eq!(machine_function.next_vreg_id, 3);
-        let values = run_virtual_moves(&insts, &[(VRegId(0), 10), (VRegId(1), 20), (VRegId(2), 30)]);
+        let values =
+            run_virtual_moves(&insts, &[(VRegId(0), 10), (VRegId(1), 20), (VRegId(2), 30)]);
         assert_eq!(values[&VRegId(0)], 20);
         assert_eq!(values[&VRegId(1)], 30);
     }
