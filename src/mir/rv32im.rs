@@ -283,4 +283,18 @@ impl TargetInst for RV32Inst {
             _ => false,
         }
     }
+
+    fn load_imm(rd: Register<Self::PhysicalReg>, imm: i32) -> Self
+    where
+        Self: Sized,
+    {
+        RV32Inst::Li { rd, imm }
+    }
+
+    fn mv(rd: Register<Self::PhysicalReg>, rs: Register<Self::PhysicalReg>) -> Self
+    where
+        Self: Sized,
+    {
+        RV32Inst::Mv { rd, rs }
+    }
 }

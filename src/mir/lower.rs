@@ -1,7 +1,7 @@
 pub mod phi;
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     error::Error,
     fmt::{self, Display, Formatter},
     rc::Rc,
@@ -19,11 +19,13 @@ use crate::{
     },
     mir::{
         BlockId, FrameInfo, FrameLayout, Linkage, MachineBlock, MachineFunction, MachineModule,
-        MachineSegment, MachineSymbolKind, Register, StackSlotId, SymbolId, VRegId,
+        MachineSegment, MachineSymbolKind, Register, StackSlotId, SymbolId, TargetArch, VRegId,
         lower::phi::PhiInfo,
         rv32im::{RV32Arch, RV32Inst, RV32Reg},
     },
 };
+
+use crate::mir::TargetInst;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LowerOptions {
@@ -89,6 +91,127 @@ impl Display for LowerError {
 }
 
 impl Error for LowerError {}
+
+fn lower_operand<R: TargetArch>(
+    operand: &ValuePtr,
+    out: &mut Vec<R::MachineInst>,
+    state: &FunctionLoweringState,
+    machine_function: &mut MachineFunction<R>,
+) -> Result<Register<R::PhysicalReg>, LowerError> {
+    if let ValueKind::Constant(Constant::ConstantInt(number)) = &operand.kind {
+        let vreg = machine_function.new_vreg();
+        out.push(R::MachineInst::load_imm(
+            Register::Virtual(vreg),
+            number.0 as i32,
+        ));
+        return Ok(Register::Virtual(vreg));
+    }
+
+    if let Some(vreg) = state.vreg_for_value(operand) {
+        Ok(Register::Virtual(vreg))
+    } else {
+        Err(LowerError::UnknownBlock {
+            function: state.function_name.clone(),
+            block_name: operand.get_name(),
+        })
+    }
+}
+
+fn resolve_parallel_copy<R: TargetArch>(
+    moves: Vec<(Register<R::PhysicalReg>, Register<R::PhysicalReg>)>,
+    machine_function: &mut MachineFunction<R>,
+) -> Vec<R::MachineInst> {
+    let mut edges: HashMap<Register<R::PhysicalReg>, Vec<Register<R::PhysicalReg>>> =
+        HashMap::new();
+    for (dst, src) in moves {
+        if dst != src {
+            edges.entry(src).or_default().push(dst);
+        }
+    }
+
+    let mut visited = HashSet::new();
+    let mut visiting = HashSet::new();
+
+    let mut middle_insts: Vec<R::MachineInst> = Vec::new();
+    let mut first_insts: Vec<R::MachineInst> = Vec::new();
+    let mut last_insts: Vec<R::MachineInst> = Vec::new();
+
+    fn visit_fn<R: TargetArch>(
+        node: Register<R::PhysicalReg>,
+        visited: &mut HashSet<Register<R::PhysicalReg>>,
+        visiting: &mut HashSet<Register<R::PhysicalReg>>,
+        edges: &HashMap<Register<R::PhysicalReg>, Vec<Register<R::PhysicalReg>>>,
+        middle_insts: &mut Vec<R::MachineInst>,
+        first_insts: &mut Vec<R::MachineInst>,
+        last_insts: &mut Vec<R::MachineInst>,
+        machine_function: &mut MachineFunction<R>,
+    ) {
+        if visited.contains(&node) {
+            return;
+        }
+        visiting.insert(node);
+        visited.insert(node);
+
+        if let Some(neighbors) = edges.get(&node) {
+            for &neighbor in neighbors {
+                visit_fn(
+                    neighbor,
+                    visited,
+                    visiting,
+                    edges,
+                    middle_insts,
+                    first_insts,
+                    last_insts,
+                    machine_function,
+                );
+                if visiting.contains(&neighbor) {
+                    let temp = Register::Virtual(machine_function.new_vreg());
+                    first_insts.push(R::MachineInst::mv(temp, node));
+                    last_insts.push(R::MachineInst::mv(neighbor, temp));
+                } else {
+                    middle_insts.push(R::MachineInst::mv(neighbor, node));
+                }
+            }
+        }
+
+        visiting.remove(&node);
+    }
+
+    let nodes: Vec<_> = edges.keys().copied().collect();
+    for node in nodes {
+        visit_fn(
+            node,
+            &mut visited,
+            &mut visiting,
+            &edges,
+            &mut middle_insts,
+            &mut first_insts,
+            &mut last_insts,
+            machine_function,
+        );
+    }
+
+    let mut out = Vec::new();
+    out.extend(first_insts);
+    out.extend(middle_insts);
+    out.extend(last_insts);
+    out
+}
+
+fn parallel_copy<R: TargetArch>(
+    phis: Vec<(VRegId, ValuePtr)>,
+    out: &mut Vec<R::MachineInst>,
+    state: &mut FunctionLoweringState,
+    machine_function: &mut MachineFunction<R>,
+) -> Result<(), LowerError> {
+    let mut moves = Vec::with_capacity(phis.len());
+    for (dst, value) in phis {
+        let src = lower_operand(&value, out, state, machine_function)?;
+        moves.push((Register::Virtual(dst), src));
+    }
+    out.extend(resolve_parallel_copy(moves, machine_function));
+    Ok(())
+}
 
 #[derive(Debug, Default)]
 struct ModuleLoweringState {
@@ -426,31 +549,6 @@ impl RV32Lowerer {
         let inst = instruction.as_instruction();
         let operands = &inst.operands;
 
-        fn lower_operand(
-            operand: &ValuePtr,
-            out: &mut Vec<RV32Inst>,
-            state: &FunctionLoweringState,
-            machine_function: &mut MachineFunction<RV32Arch>,
-        ) -> Result<Register<RV32Reg>, LowerError> {
-            if let ValueKind::Constant(Constant::ConstantInt(number)) = &operand.kind {
-                let vreg = machine_function.new_vreg();
-                out.push(RV32Inst::Li {
-                    rd: Register::Virtual(vreg),
-                    imm: number.0 as i32,
-                });
-                return Ok(Register::Virtual(vreg));
-            }
-
-            if let Some(vreg) = state.vreg_for_value(operand) {
-                Ok(Register::Virtual(vreg))
-            } else {
-                Err(LowerError::UnknownBlock {
-                    function: state.function_name.clone(),
-                    block_name: operand.get_name(),
-                })
-            }
-        }
-
         fn emit_masked_value(
             src: Register<RV32Reg>,
             bits: u8,
@@ -625,18 +723,12 @@ impl RV32Lowerer {
                             let transit_block_id = machine_function.blocks.len();
                             let mut transit_insts: Vec<RV32Inst> = Vec::new();
 
-                            for (dst, value) in target_block_phis.iter() {
-                                let src = lower_operand(
-                                    value,
-                                    &mut transit_insts,
-                                    state,
-                                    machine_function,
-                                )?;
-                                transit_insts.push(RV32Inst::Mv {
-                                    rd: Register::Virtual(*dst),
-                                    rs: src,
-                                });
-                            }
+                            parallel_copy(
+                                target_block_phis,
+                                &mut transit_insts,
+                                state,
+                                machine_function,
+                            )?;
                             transit_insts.push(RV32Inst::Jal {
                                 rd: Register::Physical(RV32Reg::Zero),
                                 label: target_block_id,
@@ -685,15 +777,11 @@ impl RV32Lowerer {
                         .get(&target_block_id)
                         .map(collect_phis_from_info);
 
-                    if let Some(target_block_phis) = &target_block_phis {
-                        for (dst, value) in target_block_phis {
-                            let src = lower_operand(value, &mut out, state, machine_function)?;
-                            out.push(RV32Inst::Mv {
-                                rd: Register::Virtual(*dst),
-                                rs: src,
-                            });
-                        }
-                    };
+                    if let Some(target_block_phis) = target_block_phis
+                        && !target_block_phis.is_empty()
+                    {
+                        parallel_copy(target_block_phis, &mut out, state, machine_function)?;
+                    }
 
                     out.push(RV32Inst::Jal {
                         rd: Register::Physical(RV32Reg::Zero),
@@ -1348,5 +1436,91 @@ fn empty_machine_function(name: String) -> MachineFunction<RV32Arch> {
             outgoing_arg_offset: 0,
             incoming_arg_offset: 0,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{empty_machine_function, resolve_parallel_copy};
+    use crate::mir::{Register, VRegId};
+    use crate::mir::rv32im::{RV32Arch, RV32Inst};
+    use std::collections::HashMap;
+
+    fn run_virtual_moves(
+        insts: &[RV32Inst],
+        initial_values: &[(VRegId, i32)],
+    ) -> HashMap<VRegId, i32> {
+        let mut values: HashMap<VRegId, i32> = initial_values.iter().copied().collect();
+        for inst in insts {
+            match inst {
+                RV32Inst::Mv {
+                    rd: Register::Virtual(dst),
+                    rs: Register::Virtual(src),
+                } => {
+                    let value = values[src];
+                    values.insert(*dst, value);
+                }
+                other => panic!("unexpected instruction in parallel copy test: {other:?}"),
+            }
+        }
+        values
+    }
+
+    #[test]
+    fn resolve_parallel_copy_handles_acyclic_chain() {
+        let mut machine_function = empty_machine_function("test".to_string());
+        machine_function.next_vreg_id = 3;
+
+        let insts = resolve_parallel_copy::<RV32Arch>(
+            vec![
+                (Register::Virtual(VRegId(0)), Register::Virtual(VRegId(1))),
+                (Register::Virtual(VRegId(1)), Register::Virtual(VRegId(2))),
+            ],
+            &mut machine_function,
+        );
+
+        assert_eq!(machine_function.next_vreg_id, 3);
+        let values = run_virtual_moves(&insts, &[(VRegId(0), 10), (VRegId(1), 20), (VRegId(2), 30)]);
+        assert_eq!(values[&VRegId(0)], 20);
+        assert_eq!(values[&VRegId(1)], 30);
+    }
+
+    #[test]
+    fn resolve_parallel_copy_handles_swap_cycle() {
+        let mut machine_function = empty_machine_function("test".to_string());
+        machine_function.next_vreg_id = 2;
+
+        let insts = resolve_parallel_copy::<RV32Arch>(
+            vec![
+                (Register::Virtual(VRegId(0)), Register::Virtual(VRegId(1))),
+                (Register::Virtual(VRegId(1)), Register::Virtual(VRegId(0))),
+            ],
+            &mut machine_function,
+        );
+
+        assert_eq!(machine_function.next_vreg_id, 3);
+        assert_eq!(insts.len(), 3);
+        let values = run_virtual_moves(&insts, &[(VRegId(0), 10), (VRegId(1), 20)]);
+        assert_eq!(values[&VRegId(0)], 20);
+        assert_eq!(values[&VRegId(1)], 10);
+    }
+
+    #[test]
+    fn resolve_parallel_copy_handles_fanout() {
+        let mut machine_function = empty_machine_function("test".to_string());
+        machine_function.next_vreg_id = 3;
+
+        let insts = resolve_parallel_copy::<RV32Arch>(
+            vec![
+                (Register::Virtual(VRegId(0)), Register::Virtual(VRegId(2))),
+                (Register::Virtual(VRegId(1)), Register::Virtual(VRegId(2))),
+            ],
+            &mut machine_function,
+        );
+
+        assert_eq!(machine_function.next_vreg_id, 3);
+        let values = run_virtual_moves(&insts, &[(VRegId(0), 1), (VRegId(1), 2), (VRegId(2), 99)]);
+        assert_eq!(values[&VRegId(0)], 99);
+        assert_eq!(values[&VRegId(1)], 99);
     }
 }

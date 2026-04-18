@@ -26,6 +26,14 @@ pub trait TargetInst {
     fn def_regs(&self) -> Vec<Register<Self::PhysicalReg>>;
     fn use_regs(&self) -> Vec<Register<Self::PhysicalReg>>;
     fn is_terminator(&self) -> bool;
+
+    fn load_imm(rd: Register<Self::PhysicalReg>, imm: i32) -> Self
+    where
+        Self: Sized;
+
+    fn mv(rd: Register<Self::PhysicalReg>, rs: Register<Self::PhysicalReg>) -> Self
+    where
+        Self: Sized;    
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
