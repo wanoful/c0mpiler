@@ -1,0 +1,73 @@
+use crate::{
+    ir::{
+        LLVMModule,
+        globalxxx::FunctionPtr,
+        ir_value::{InstructionPtr, ValuePtr},
+    },
+    mir::{
+        BlockId, MachineFunction, MachineModule, VRegId,
+        lower::{FunctionLoweringState, LowerError, RV32Lowerer},
+        rv32im::RV32Arch,
+    },
+};
+
+#[derive(Debug)]
+pub(super) struct PhiIncoming {
+    pred: BlockId,
+    value: ValuePtr,
+}
+
+#[derive(Debug)]
+pub(super) struct PhiInfo {
+    block: BlockId,
+    phi_inst: InstructionPtr,
+    dst: VRegId,
+    incomings: Vec<PhiIncoming>,
+}
+
+impl RV32Lowerer {
+    pub(super) fn collect_phis(
+        &mut self,
+        machine_function: &mut MachineFunction<RV32Arch>,
+        state: &mut FunctionLoweringState,
+    ) -> Result<(), LowerError> {
+        for block in state.block_order.clone().iter() {
+            let block_id = state.block_id(block).unwrap();
+            let phi_infos = block
+                .as_basic_block()
+                .instructions
+                .borrow()
+                .iter()
+                .map_while(|ptr| {
+                    let inst = ptr.as_instruction();
+                    if !matches!(inst.kind, crate::ir::ir_value::InstructionKind::Phi) {
+                        return None;
+                    }
+                    let incomings = inst
+                        .operands
+                        .chunks(2)
+                        .map(|chunk| {
+                            let value = &chunk[0];
+                            let succ_block = &chunk[1];
+                            let succ_block_id = state.block_id(succ_block).unwrap();
+                            PhiIncoming {
+                                pred: succ_block_id,
+                                value: value.clone(),
+                            }
+                        })
+                        .collect();
+                    let dst = machine_function.new_vreg();
+                    state.record_vreg(ptr, dst);
+                    Some(PhiInfo {
+                        block: block_id,
+                        phi_inst: ptr.clone(),
+                        dst,
+                        incomings,
+                    })
+                })
+                .collect();
+            state.phi_infos.insert(block_id, phi_infos);
+        }
+        Ok(())
+    }
+}

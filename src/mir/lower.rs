@@ -1,3 +1,5 @@
+pub mod phi;
+
 use std::{
     collections::HashMap,
     error::Error,
@@ -15,9 +17,7 @@ use crate::{
         }, layout::LayoutShape,
     },
     mir::{
-        BlockId, FrameInfo, FrameLayout, Linkage, MachineBlock, MachineFunction, MachineModule,
-        MachineSegment, MachineSymbolKind, Register, StackSlotId, SymbolId, VRegId,
-        rv32im::{RV32Arch, RV32Inst, RV32Reg},
+        BlockId, FrameInfo, FrameLayout, Linkage, MachineBlock, MachineFunction, MachineModule, MachineSegment, MachineSymbolKind, Register, StackSlotId, SymbolId, VRegId, lower::phi::PhiInfo, rv32im::{RV32Arch, RV32Inst, RV32Reg}
     },
 };
 
@@ -99,6 +99,7 @@ struct FunctionLoweringState {
     block_order: Vec<BasicBlockPtr>,
     value_vregs: HashMap<*const Value, VRegId>,
     stack_slots: HashMap<*const Value, StackSlotId>,
+    phi_infos: HashMap<BlockId, Vec<PhiInfo>>,
 }
 
 impl FunctionLoweringState {
@@ -109,6 +110,7 @@ impl FunctionLoweringState {
             block_order: Vec::new(),
             value_vregs: HashMap::new(),
             stack_slots: HashMap::new(),
+            phi_infos: HashMap::new(),
         }
     }
 
@@ -117,7 +119,7 @@ impl FunctionLoweringState {
         self.block_order.push(block.clone());
     }
 
-    fn block_id(&self, block: &BasicBlockPtr) -> Option<BlockId> {
+    fn block_id(&self, block: &ValuePtr) -> Option<BlockId> {
         self.block_map.get(&Rc::as_ptr(block)).copied()
     }
 
@@ -334,6 +336,7 @@ impl RV32Lowerer {
 
         machine_function.entry = BlockId(0);
         self.initialize_blocks(&blocks, &mut machine_function, &mut state)?;
+        self.collect_phis(&mut machine_function, &mut state)?;
         self.initialize_func_arguments(function, &mut machine_function, &mut state);
 
         machine_function.entry =
