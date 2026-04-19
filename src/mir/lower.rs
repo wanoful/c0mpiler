@@ -20,9 +20,7 @@ use crate::{
         layout::LayoutShape,
     },
     mir::{
-        BlockId, ControlFlowGraph, FrameInfo, FrameLayout, Linkage, LivenessInfo, LoweringTarget,
-        MachineBlock, MachineFunction, MachineModule, MachineSegment, MachineSymbolKind, Register,
-        StackSlotId, SymbolId, TargetArch, VRegId, lower::phi::PhiInfo,
+        BlockId, ControlFlowGraph, FrameInfo, FrameLayout, Linkage, LivenessInfo, LoweringTarget, MachineBlock, MachineFunction, MachineModule, MachineSegment, MachineSymbolKind, Register, StackSlotId, SymbolId, TargetArch, VRegCounter, VRegId, lower::phi::PhiInfo
     },
 };
 
@@ -1239,7 +1237,7 @@ fn empty_machine_function<T: TargetArch>(name: String) -> MachineFunction<T> {
     MachineFunction {
         name,
         blocks: Vec::new(),
-        next_vreg_id: 0,
+        vreg_counter: VRegCounter(0),
         entry: BlockId(0),
         frame_info: FrameInfo {
             stack_slots: Vec::new(),
@@ -1285,7 +1283,7 @@ mod tests {
     #[test]
     fn resolve_parallel_copy_handles_acyclic_chain() {
         let mut machine_function = empty_machine_function("test".to_string());
-        machine_function.next_vreg_id = 3;
+        machine_function.vreg_counter.0 = 3;
 
         let insts = resolve_parallel_copy::<RV32Arch>(
             vec![
@@ -1295,7 +1293,7 @@ mod tests {
             &mut machine_function,
         );
 
-        assert_eq!(machine_function.next_vreg_id, 3);
+        assert_eq!(machine_function.vreg_counter.0, 3);
         let values =
             run_virtual_moves(&insts, &[(VRegId(0), 10), (VRegId(1), 20), (VRegId(2), 30)]);
         assert_eq!(values[&VRegId(0)], 20);
@@ -1305,7 +1303,7 @@ mod tests {
     #[test]
     fn resolve_parallel_copy_handles_swap_cycle() {
         let mut machine_function = empty_machine_function("test".to_string());
-        machine_function.next_vreg_id = 2;
+        machine_function.vreg_counter.0 = 2;
 
         let insts = resolve_parallel_copy::<RV32Arch>(
             vec![
@@ -1315,7 +1313,7 @@ mod tests {
             &mut machine_function,
         );
 
-        assert_eq!(machine_function.next_vreg_id, 3);
+        assert_eq!(machine_function.vreg_counter.0, 3);
         assert_eq!(insts.len(), 3);
         let values = run_virtual_moves(&insts, &[(VRegId(0), 10), (VRegId(1), 20)]);
         assert_eq!(values[&VRegId(0)], 20);
@@ -1325,7 +1323,7 @@ mod tests {
     #[test]
     fn resolve_parallel_copy_handles_fanout() {
         let mut machine_function = empty_machine_function("test".to_string());
-        machine_function.next_vreg_id = 3;
+        machine_function.vreg_counter.0 = 3;
 
         let insts = resolve_parallel_copy::<RV32Arch>(
             vec![
@@ -1335,7 +1333,7 @@ mod tests {
             &mut machine_function,
         );
 
-        assert_eq!(machine_function.next_vreg_id, 3);
+        assert_eq!(machine_function.vreg_counter.0, 3);
         let values = run_virtual_moves(&insts, &[(VRegId(0), 1), (VRegId(1), 2), (VRegId(2), 99)]);
         assert_eq!(values[&VRegId(0)], 99);
         assert_eq!(values[&VRegId(1)], 99);

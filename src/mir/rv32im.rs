@@ -1,6 +1,9 @@
 use crate::{
     impossible,
-    mir::{BlockId, LoweringTarget, Register, StackSlotId, SymbolId, TargetArch, TargetInst},
+    mir::{
+        BlockId, LoweringTarget, Register, StackSlotId, SymbolId, TargetArch, TargetInst,
+        generate_reg_rewrite,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -54,8 +57,9 @@ impl RV32Reg {
 
 type Reg = Register<RV32Reg>;
 
+generate_reg_rewrite! {
 #[rustfmt::skip]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RV32Inst {
     Add { rd: Reg, rs1: Reg, rs2: Reg },
     Sub { rd: Reg, rs1: Reg, rs2: Reg },
@@ -132,6 +136,7 @@ pub enum RV32Inst {
     StoreOutgoingArg { rs: Reg, offset: i32 },
     LoadIncomingArg { rd: Reg, offset: i32 },
     GetStackAddr { rd: Reg, slot: StackSlotId },
+}
 }
 
 impl TargetInst for RV32Inst {
@@ -330,9 +335,22 @@ impl TargetInst for RV32Inst {
             _ => vec![],
         }
     }
+
+    fn rewrite_vreg(
+        &self,
+        use_rewrites: &std::collections::HashMap<super::VRegId, Register<Self::PhysicalReg>>,
+        def_rewrites: &std::collections::HashMap<super::VRegId, Register<Self::PhysicalReg>>,
+    ) -> Self
+    where
+        Self: Sized,
+    {
+        self.rewrite_vreg(use_rewrites, def_rewrites)
+    }
 }
 
 impl LoweringTarget for RV32Arch {
+    const WORD_SIZE: usize = 4;
+
     fn zero_reg() -> Self::PhysicalReg {
         RV32Reg::Zero
     }
@@ -527,5 +545,49 @@ impl LoweringTarget for RV32Arch {
 
     fn emit_get_stack_addr(rd: Reg, slot: StackSlotId) -> Self::MachineInst {
         RV32Inst::GetStackAddr { rd, slot }
+    }
+
+    fn emit_load_stack_slot(
+        rd: Register<Self::PhysicalReg>,
+        slot: StackSlotId,
+    ) -> Self::MachineInst {
+        RV32Inst::LoadStack { rd, slot }
+    }
+
+    fn emit_store_stack_slot(
+        rs: Register<Self::PhysicalReg>,
+        slot: StackSlotId,
+    ) -> Self::MachineInst {
+        RV32Inst::SaveStack { rs, slot }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::mir;
+
+    use super::*;
+
+    #[test]
+    fn test_rewrite() {
+        let inst = RV32Inst::Add {
+            rd: Register::Virtual(mir::VRegId(1)),
+            rs1: Register::Virtual(mir::VRegId(2)),
+            rs2: Register::Physical(RV32Reg::T0),
+        };
+        let mut use_rewrites = std::collections::HashMap::new();
+        let mut def_rewrites = std::collections::HashMap::new();
+        use_rewrites.insert(mir::VRegId(2), Register::Physical(RV32Reg::T1));
+        def_rewrites.insert(mir::VRegId(1), Register::Physical(RV32Reg::T2));
+
+        let rewritten = inst.rewrite_vreg(&use_rewrites, &def_rewrites);
+        assert_eq!(
+            rewritten,
+            RV32Inst::Add {
+                rd: Register::Physical(RV32Reg::T2),
+                rs1: Register::Physical(RV32Reg::T1),
+                rs2: Register::Physical(RV32Reg::T0),
+            }
+        );
     }
 }

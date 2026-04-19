@@ -1,6 +1,9 @@
 pub mod lower;
-pub mod rv32im;
+pub(crate) mod macros;
 pub mod regalloc;
+pub mod rv32im;
+
+pub(crate) use macros::*;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -42,9 +45,19 @@ pub trait TargetInst {
     fn mv(rd: Register<Self::PhysicalReg>, rs: Register<Self::PhysicalReg>) -> Self
     where
         Self: Sized;
+
+    fn rewrite_vreg(
+        &self,
+        use_rewrites: &HashMap<VRegId, Register<Self::PhysicalReg>>,
+        def_rewrites: &HashMap<VRegId, Register<Self::PhysicalReg>>,
+    ) -> Self
+    where
+        Self: Sized;
 }
 
 pub trait LoweringTarget: TargetArch + Default {
+    const WORD_SIZE: usize;
+
     fn zero_reg() -> Self::PhysicalReg;
     fn return_reg() -> Self::PhysicalReg;
     fn arg_reg(index: usize) -> Self::PhysicalReg;
@@ -207,6 +220,15 @@ pub trait LoweringTarget: TargetArch + Default {
     fn emit_load_incoming_arg(rd: Register<Self::PhysicalReg>, offset: i32) -> Self::MachineInst;
     fn emit_get_stack_addr(rd: Register<Self::PhysicalReg>, slot: StackSlotId)
     -> Self::MachineInst;
+
+    fn emit_load_stack_slot(
+        rd: Register<Self::PhysicalReg>,
+        slot: StackSlotId,
+    ) -> Self::MachineInst;
+    fn emit_store_stack_slot(
+        rs: Register<Self::PhysicalReg>,
+        slot: StackSlotId,
+    ) -> Self::MachineInst;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -250,10 +272,20 @@ pub struct FrameLayout {
     pub incoming_arg_offset: isize,
 }
 
+pub struct VRegCounter(usize);
+
+impl VRegCounter {
+    pub fn next(&mut self) -> VRegId {
+        let id = self.0;
+        self.0 += 1;
+        VRegId(id)
+    }
+}
+
 pub struct MachineFunction<T: TargetArch> {
     pub name: String,
     pub blocks: Vec<MachineBlock<T>>,
-    pub next_vreg_id: usize,
+    pub vreg_counter: VRegCounter,
     pub entry: BlockId,
     pub frame_info: FrameInfo,
     pub frame_layout: FrameLayout,
@@ -279,9 +311,7 @@ impl<T: TargetArch> MachineFunction<T> {
     }
 
     pub fn new_vreg(&mut self) -> VRegId {
-        let id = VRegId(self.next_vreg_id);
-        self.next_vreg_id += 1;
-        id
+        self.vreg_counter.next()
     }
 
     pub fn record_outgoing_arg(&mut self, size: usize) {
@@ -415,7 +445,10 @@ impl<T: TargetArch> LivenessInfo<T> {
         for block in &machine_function.blocks {
             let mut live = self.live_out.get(&block.id).cloned().unwrap_or_default();
             for (inst_index, inst) in block.instructions.iter().enumerate().rev() {
-                let loc = InstLocation {block_id: block.id, inst_index};
+                let loc = InstLocation {
+                    block_id: block.id,
+                    inst_index,
+                };
                 self.live_after.insert(loc, live.clone());
                 let mut use_i = HashSet::from_iter(inst.use_regs());
                 let def_i = HashSet::from_iter(inst.def_regs());
@@ -425,8 +458,15 @@ impl<T: TargetArch> LivenessInfo<T> {
         }
     }
 
-    pub fn get_live_after(&self, block_id: BlockId, inst_index: usize) -> &HashSet<Register<T::PhysicalReg>> {
-        let loc = InstLocation { block_id, inst_index };
+    pub fn get_live_after(
+        &self,
+        block_id: BlockId,
+        inst_index: usize,
+    ) -> &HashSet<Register<T::PhysicalReg>> {
+        let loc = InstLocation {
+            block_id,
+            inst_index,
+        };
         &self.live_after[&loc]
     }
 
