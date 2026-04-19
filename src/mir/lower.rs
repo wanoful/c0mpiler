@@ -609,6 +609,9 @@ impl<T: LoweringTarget> Lowerer<T> {
             )?;
         }
 
+        self.register_allocation(&mut machine_function);
+        self.compute_frame_layout(&mut  machine_function);
+
         Ok(machine_function)
     }
 
@@ -1251,6 +1254,8 @@ fn empty_machine_function<T: TargetArch>(name: String) -> MachineFunction<T> {
             slot_offsets: HashMap::new(),
             outgoing_arg_offset: 0,
             incoming_arg_offset: 0,
+            callee_saved_slots: HashMap::new(),
+            ra_slot: None,
         },
     }
 }

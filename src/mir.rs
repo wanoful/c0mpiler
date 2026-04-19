@@ -2,6 +2,7 @@ pub mod lower;
 pub(crate) mod macros;
 pub mod regalloc;
 pub mod rv32im;
+pub(crate) mod layout;
 
 pub(crate) use macros::*;
 
@@ -12,7 +13,7 @@ use std::{
 };
 
 pub trait TargetArch: Clone + 'static {
-    type PhysicalReg: Clone + Copy + PartialEq + Eq + Hash + Debug;
+    type PhysicalReg: Clone + Copy + PartialEq + Eq + Hash + Debug + PartialOrd + Ord;
     type MachineInst: TargetInst<PhysicalReg = Self::PhysicalReg> + Clone + Debug;
 
     fn get_allocatable_regs() -> Vec<Self::PhysicalReg>;
@@ -275,11 +276,13 @@ pub struct FrameInfo<T: TargetArch> {
     pub need_save_ra: bool,
 }
 
-pub struct FrameLayout {
+pub struct FrameLayout<T: TargetArch> {
     pub frame_size: usize,
     pub slot_offsets: HashMap<StackSlotId, isize>,
     pub outgoing_arg_offset: isize,
     pub incoming_arg_offset: isize,
+    pub callee_saved_slots: HashMap<T::PhysicalReg, StackSlotId>,
+    pub ra_slot: Option<StackSlotId>,
 }
 
 pub struct VRegCounter(usize);
@@ -298,7 +301,7 @@ pub struct MachineFunction<T: TargetArch> {
     pub vreg_counter: VRegCounter,
     pub entry: BlockId,
     pub frame_info: FrameInfo<T>,
-    pub frame_layout: FrameLayout,
+    pub frame_layout: FrameLayout<T>,
 }
 
 impl<T: TargetArch> MachineFunction<T> {
