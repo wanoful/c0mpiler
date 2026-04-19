@@ -1,8 +1,8 @@
 use crate::{
     impossible,
     mir::{
-        BlockId, LoweringTarget, Register, StackSlotId, SymbolId, TargetArch, TargetInst,
-        generate_reg_rewrite,
+        BlockId, FrameLayout, LoweringTarget, Register, StackSlotId, SymbolId, TargetArch,
+        TargetInst, generate_reg_rewrite,
     },
 };
 
@@ -17,8 +17,8 @@ impl TargetArch for RV32Arch {
         use RV32Reg::*;
         // 删除 T5, T6 以供溢出使用
         vec![
-            T0, T1, T2, T3, T4, S0, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, A0, A1,
-            A2, A3, A4, A5, A6, A7,
+            T0, T1, T2, T3, T4, S0, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, A0, A1, A2, A3,
+            A4, A5, A6, A7,
         ]
     }
 
@@ -376,7 +376,7 @@ impl TargetInst for RV32Inst {
     {
         self.rewrite_vreg(use_rewrites, def_rewrites)
     }
-    
+
     fn is_call(&self) -> bool {
         match self {
             RV32Inst::Call { .. } => true,
@@ -605,7 +605,7 @@ impl LoweringTarget for RV32Arch {
     ) -> Self::MachineInst {
         RV32Inst::SaveStack { rs, slot }
     }
-    
+
     fn emit_adjust_sp(offset: isize) -> Vec<Self::MachineInst> {
         if offset == 0 {
             vec![]
@@ -629,6 +629,151 @@ impl LoweringTarget for RV32Arch {
                     rs2: Register::Physical(temp_reg),
                 },
             ]
+        }
+    }
+
+    fn expand_pseudo(inst: &RV32Inst, frame_layout: &FrameLayout<RV32Arch>) -> Vec<RV32Inst>
+    where
+        Self: Sized,
+    {
+        use RV32Inst::*;
+        match inst {
+            LoadStack { rd, slot } => {
+                let offset = frame_layout.slot_offsets[slot];
+                if -2048 <= offset && offset <= 2047 {
+                    vec![RV32Inst::Lw {
+                        rd: *rd,
+                        rs1: Register::Physical(RV32Reg::Sp),
+                        imm: offset as i32,
+                    }]
+                } else {
+                    let temp_reg = Self::spill_scratch_regs()[0];
+                    vec![
+                        RV32Inst::Li {
+                            rd: Register::Physical(temp_reg),
+                            imm: offset as i32,
+                        },
+                        RV32Inst::Add {
+                            rd: Register::Physical(temp_reg),
+                            rs1: Register::Physical(RV32Reg::Sp),
+                            rs2: Register::Physical(temp_reg),
+                        },
+                        RV32Inst::Lw {
+                            rd: *rd,
+                            rs1: Register::Physical(temp_reg),
+                            imm: 0,
+                        },
+                    ]
+                }
+            }
+            SaveStack { rs, slot } => {
+                let offset = frame_layout.slot_offsets[slot];
+                if -2048 <= offset && offset <= 2047 {
+                    vec![RV32Inst::Sw {
+                        rs1: Register::Physical(RV32Reg::Sp),
+                        rs2: *rs,
+                        imm: offset as i32,
+                    }]
+                } else {
+                    let temp_reg = Self::spill_scratch_regs()[0];
+                    vec![
+                        RV32Inst::Li {
+                            rd: Register::Physical(temp_reg),
+                            imm: offset as i32,
+                        },
+                        RV32Inst::Add {
+                            rd: Register::Physical(temp_reg),
+                            rs1: Register::Physical(RV32Reg::Sp),
+                            rs2: Register::Physical(temp_reg),
+                        },
+                        RV32Inst::Sw {
+                            rs1: Register::Physical(temp_reg),
+                            rs2: *rs,
+                            imm: 0,
+                        },
+                    ]
+                }
+            }
+            StoreOutgoingArg { rs, offset } => {
+                let offset = frame_layout.outgoing_arg_offset as i32 + *offset as i32;
+                if -2048 <= offset && offset <= 2047 {
+                    vec![RV32Inst::Sw {
+                        rs1: Register::Physical(RV32Reg::Sp),
+                        rs2: *rs,
+                        imm: offset,
+                    }]
+                } else {
+                    let temp_reg = Self::spill_scratch_regs()[0];
+                    vec![
+                        RV32Inst::Li {
+                            rd: Register::Physical(temp_reg),
+                            imm: offset,
+                        },
+                        RV32Inst::Add {
+                            rd: Register::Physical(temp_reg),
+                            rs1: Register::Physical(RV32Reg::Sp),
+                            rs2: Register::Physical(temp_reg),
+                        },
+                        RV32Inst::Sw {
+                            rs1: Register::Physical(temp_reg),
+                            rs2: *rs,
+                            imm: 0,
+                        },
+                    ]
+                }
+            }
+            LoadIncomingArg { rd, offset } => {
+                let offset = frame_layout.incoming_arg_offset as i32 + *offset as i32;
+                if -2048 <= offset && offset <= 2047 {
+                    vec![RV32Inst::Lw {
+                        rd: *rd,
+                        rs1: Register::Physical(RV32Reg::Sp),
+                        imm: offset,
+                    }]
+                } else {
+                    let temp_reg = Self::spill_scratch_regs()[0];
+                    vec![
+                        RV32Inst::Li {
+                            rd: Register::Physical(temp_reg),
+                            imm: offset,
+                        },
+                        RV32Inst::Add {
+                            rd: Register::Physical(temp_reg),
+                            rs1: Register::Physical(RV32Reg::Sp),
+                            rs2: Register::Physical(temp_reg),
+                        },
+                        RV32Inst::Lw {
+                            rd: *rd,
+                            rs1: Register::Physical(temp_reg),
+                            imm: 0,
+                        },
+                    ]
+                }
+            }
+            GetStackAddr { rd, slot } => {
+                let offset = frame_layout.slot_offsets[slot] as i32;
+                if -2048 <= offset && offset <= 2047 {
+                    vec![RV32Inst::Addi {
+                        rd: *rd,
+                        rs1: Register::Physical(RV32Reg::Sp),
+                        imm: offset,
+                    }]
+                } else {
+                    let temp_reg = Self::spill_scratch_regs()[0];
+                    vec![
+                        RV32Inst::Li {
+                            rd: Register::Physical(temp_reg),
+                            imm: offset,
+                        },
+                        RV32Inst::Add {
+                            rd: *rd,
+                            rs1: Register::Physical(RV32Reg::Sp),
+                            rs2: Register::Physical(temp_reg),
+                        },
+                    ]
+                }
+            }
+            _ => vec![inst.clone()],
         }
     }
 }

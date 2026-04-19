@@ -31,7 +31,9 @@ pub struct SymbolId(pub usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Register<R>
-where R: Clone + Copy + PartialEq + Eq + Hash + Debug{
+where
+    R: Clone + Copy + PartialEq + Eq + Hash + Debug,
+{
     Virtual(VRegId),
     Physical(R),
 }
@@ -242,6 +244,10 @@ pub trait LoweringTarget: TargetArch + Default {
     ) -> Self::MachineInst;
 
     fn emit_adjust_sp(offset: isize) -> Vec<Self::MachineInst>;
+
+    fn expand_pseudo(inst: &Self::MachineInst, frame_layout: &FrameLayout<Self>) -> Vec<Self::MachineInst>
+    where
+        Self: Sized;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

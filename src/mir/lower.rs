@@ -616,6 +616,7 @@ impl<T: LoweringTarget> Lowerer<T> {
         self.register_allocation(&mut machine_function);
         self.compute_frame_layout(&mut machine_function);
         self.insert_logue(&mut machine_function);
+        self.expand_pseudo_instructions(&mut machine_function);
 
         Ok(machine_function)
     }
@@ -1241,6 +1242,16 @@ impl<T: LoweringTarget> Lowerer<T> {
         }
 
         ControlFlowGraph { succs, preds }
+    }
+
+    fn expand_pseudo_instructions(&self, machine_function: &mut MachineFunction<T>) {
+        for block in &mut machine_function.blocks {
+            let mut expanded_insts = Vec::new();
+            for inst in &block.instructions {
+                expanded_insts.extend(T::expand_pseudo(inst, &machine_function.frame_layout));
+            }
+            block.instructions = expanded_insts;
+        }
     }
 }
 
