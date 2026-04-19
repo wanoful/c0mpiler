@@ -150,9 +150,9 @@ pub enum RV32Inst {
     Lbs { rd: Reg, symbol: SymbolId },
     Lhs { rd: Reg, symbol: SymbolId },
     Lws { rd: Reg, symbol: SymbolId },
-    Sbs { rs: Reg, symbol: SymbolId },
-    Shs { rs: Reg, symbol: SymbolId },
-    Sws { rs: Reg, symbol: SymbolId },
+    Sbs { rs: Reg, symbol: SymbolId, rt: Reg },
+    Shs { rs: Reg, symbol: SymbolId, rt: Reg },
+    Sws { rs: Reg, symbol: SymbolId, rt: Reg },
 
     Call { func: SymbolId, num_args: usize },
     Tail { func: SymbolId, num_args: usize },
@@ -216,6 +216,7 @@ impl TargetInst for RV32Inst {
             | LoadStack { rd, .. }
             | LoadIncomingArg { rd, .. }
             | GetStackAddr { rd, .. } => vec![*rd],
+            Sbs { rt, .. } | Shs { rt, .. } | Sws { rt, .. } => vec![*rt],
             Call { .. } => {
                 vec![
                     Register::Physical(RV32Reg::Ra),
@@ -571,11 +572,11 @@ impl LoweringTarget for RV32Arch {
         }
     }
 
-    fn emit_store_global(rs: Reg, symbol: SymbolId, size: usize) -> Self::MachineInst {
+    fn emit_store_global(rs: Reg, symbol: SymbolId, size: usize, rt: Reg) -> Self::MachineInst {
         match size {
-            1 => RV32Inst::Sbs { rs, symbol },
-            2 => RV32Inst::Shs { rs, symbol },
-            4 => RV32Inst::Sws { rs, symbol },
+            1 => RV32Inst::Sbs { rs, symbol, rt },
+            2 => RV32Inst::Shs { rs, symbol, rt },
+            4 => RV32Inst::Sws { rs, symbol, rt },
             _ => panic!("unsupported global store kind"),
         }
     }

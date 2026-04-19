@@ -11,6 +11,18 @@ macro_rules! rewrite_field {
             Register::Physical(reg) => Register::Physical(*reg),
         }
     };
+    (Reg, rt, $val:ident, $use_rewrites:expr, $def_rewrites:expr) => {
+        match $val {
+            Register::Virtual(vreg) => {
+                if let Some(reg) = $def_rewrites.get(&vreg) {
+                    *reg
+                } else {
+                    *$val
+                }
+            }
+            Register::Physical(reg) => Register::Physical(*reg),
+        }
+    };
     (Reg, $field:ident, $val:ident, $use_rewrites:expr, $def_rewrites:expr) => {
         match $val {
             Register::Virtual(vreg) => {

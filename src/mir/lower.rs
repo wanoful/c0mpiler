@@ -1031,6 +1031,7 @@ impl<T: LoweringTarget> Lowerer<T> {
                                 rs2,
                                 symbol,
                                 type_layout.layout.size as usize,
+                                Register::Virtual(machine_function.new_vreg()),
                             ));
                         }
                         _ => panic!("unsupported store size"),
