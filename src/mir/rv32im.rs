@@ -332,6 +332,10 @@ impl TargetInst for RV32Inst {
         }
     }
 
+    fn is_ret(&self) -> bool {
+        matches!(self, RV32Inst::Ret)
+    }
+
     fn load_imm(rd: Register<Self::PhysicalReg>, imm: i32) -> Self
     where
         Self: Sized,
@@ -390,6 +394,14 @@ impl LoweringTarget for RV32Arch {
 
     fn return_reg() -> Self::PhysicalReg {
         RV32Reg::A0
+    }
+
+    fn ra_reg() -> Self::PhysicalReg {
+        RV32Reg::Ra
+    }
+
+    fn sp_reg() -> Self::PhysicalReg {
+        RV32Reg::Sp
     }
 
     fn arg_reg(index: usize) -> Self::PhysicalReg {
@@ -592,6 +604,32 @@ impl LoweringTarget for RV32Arch {
         slot: StackSlotId,
     ) -> Self::MachineInst {
         RV32Inst::SaveStack { rs, slot }
+    }
+    
+    fn emit_adjust_sp(offset: isize) -> Vec<Self::MachineInst> {
+        if offset == 0 {
+            vec![]
+        } else if -2048 <= offset && offset <= 2047 {
+            vec![RV32Inst::Addi {
+                rd: Register::Physical(RV32Reg::Sp),
+                rs1: Register::Physical(RV32Reg::Sp),
+                imm: offset as i32,
+            }]
+        } else {
+            let temp_reg = Self::spill_scratch_regs()[0];
+
+            vec![
+                RV32Inst::Li {
+                    rd: Register::Physical(temp_reg),
+                    imm: offset as i32,
+                },
+                RV32Inst::Add {
+                    rd: Register::Physical(RV32Reg::Sp),
+                    rs1: Register::Physical(RV32Reg::Sp),
+                    rs2: Register::Physical(temp_reg),
+                },
+            ]
+        }
     }
 }
 

@@ -1,8 +1,6 @@
 pub mod lower;
 pub(crate) mod macros;
-pub mod regalloc;
 pub mod rv32im;
-pub(crate) mod layout;
 
 pub(crate) use macros::*;
 
@@ -32,17 +30,19 @@ pub struct VRegId(pub usize);
 pub struct SymbolId(pub usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Register<R> {
+pub enum Register<R>
+where R: Clone + Copy + PartialEq + Eq + Hash + Debug{
     Virtual(VRegId),
     Physical(R),
 }
 
 pub trait TargetInst {
-    type PhysicalReg;
+    type PhysicalReg: Clone + Copy + PartialEq + Eq + Hash + Debug;
 
     fn def_regs(&self) -> Vec<Register<Self::PhysicalReg>>;
     fn use_regs(&self) -> Vec<Register<Self::PhysicalReg>>;
     fn is_terminator(&self) -> bool;
+    fn is_ret(&self) -> bool;
     fn get_successors(&self) -> Vec<BlockId>;
 
     fn load_imm(rd: Register<Self::PhysicalReg>, imm: i32) -> Self
@@ -69,6 +69,8 @@ pub trait LoweringTarget: TargetArch + Default {
 
     fn zero_reg() -> Self::PhysicalReg;
     fn return_reg() -> Self::PhysicalReg;
+    fn ra_reg() -> Self::PhysicalReg;
+    fn sp_reg() -> Self::PhysicalReg;
     fn arg_reg(index: usize) -> Self::PhysicalReg;
     fn num_arg_regs() -> usize;
     fn stack_arg_size() -> usize;
@@ -238,6 +240,8 @@ pub trait LoweringTarget: TargetArch + Default {
         rs: Register<Self::PhysicalReg>,
         slot: StackSlotId,
     ) -> Self::MachineInst;
+
+    fn emit_adjust_sp(offset: isize) -> Vec<Self::MachineInst>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -1,10 +1,12 @@
-pub mod phi;
+pub(crate) mod layout;
+pub(crate) mod logue;
+pub(crate) mod phi;
+pub(crate) mod regalloc;
 
 use std::{
     collections::{HashMap, HashSet},
     error::Error,
     fmt::{self, Display, Formatter},
-    iter,
     marker::PhantomData,
     rc::Rc,
 };
@@ -20,7 +22,9 @@ use crate::{
         layout::LayoutShape,
     },
     mir::{
-        BlockId, ControlFlowGraph, FrameInfo, FrameLayout, Linkage, LivenessInfo, LoweringTarget, MachineBlock, MachineFunction, MachineModule, MachineSegment, MachineSymbolKind, Register, StackSlotId, SymbolId, TargetArch, VRegCounter, VRegId, lower::phi::PhiInfo
+        BlockId, ControlFlowGraph, FrameInfo, FrameLayout, Linkage, LivenessInfo, LoweringTarget,
+        MachineBlock, MachineFunction, MachineModule, MachineSegment, MachineSymbolKind, Register,
+        StackSlotId, SymbolId, TargetArch, VRegCounter, VRegId, lower::phi::PhiInfo,
     },
 };
 
@@ -610,7 +614,8 @@ impl<T: LoweringTarget> Lowerer<T> {
         }
 
         self.register_allocation(&mut machine_function);
-        self.compute_frame_layout(&mut  machine_function);
+        self.compute_frame_layout(&mut machine_function);
+        self.insert_logue(&mut machine_function);
 
         Ok(machine_function)
     }
@@ -1192,7 +1197,10 @@ impl<T: LoweringTarget> Lowerer<T> {
             .append(&mut insts);
     }
 
-    pub(crate) fn liveness_analysis(&self, machine_function: &MachineFunction<T>) -> LivenessInfo<T> {
+    pub(crate) fn liveness_analysis(
+        &self,
+        machine_function: &MachineFunction<T>,
+    ) -> LivenessInfo<T> {
         let mut liveness_info: LivenessInfo<T> = LivenessInfo::new(machine_function.blocks.iter());
         let cfg = self.compute_cfg(machine_function);
 
