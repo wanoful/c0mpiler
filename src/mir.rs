@@ -16,6 +16,12 @@ pub trait TargetArch: Clone + 'static {
     type MachineInst: TargetInst<PhysicalReg = Self::PhysicalReg> + Clone + Debug;
 
     fn get_allocatable_regs() -> Vec<Self::PhysicalReg>;
+
+    fn spill_scratch_regs() -> &'static [Self::PhysicalReg]
+    where
+        Self: Sized;
+
+    fn is_callee_saved(reg: Self::PhysicalReg) -> bool;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -53,6 +59,8 @@ pub trait TargetInst {
     ) -> Self
     where
         Self: Sized;
+
+    fn is_call(&self) -> bool;
 }
 
 pub trait LoweringTarget: TargetArch + Default {
@@ -259,10 +267,12 @@ pub struct MachineBlock<T: TargetArch> {
     pub instructions: Vec<T::MachineInst>,
 }
 
-pub struct FrameInfo {
+pub struct FrameInfo<T: TargetArch> {
     pub stack_slots: Vec<StackSlot>,
     pub max_align: usize,
     pub max_outgoing_arg_size: usize,
+    pub used_callee_saved: HashSet<T::PhysicalReg>,
+    pub need_save_ra: bool,
 }
 
 pub struct FrameLayout {
@@ -287,7 +297,7 @@ pub struct MachineFunction<T: TargetArch> {
     pub blocks: Vec<MachineBlock<T>>,
     pub vreg_counter: VRegCounter,
     pub entry: BlockId,
-    pub frame_info: FrameInfo,
+    pub frame_info: FrameInfo<T>,
     pub frame_layout: FrameLayout,
 }
 

@@ -15,10 +15,36 @@ impl TargetArch for RV32Arch {
 
     fn get_allocatable_regs() -> Vec<Self::PhysicalReg> {
         use RV32Reg::*;
+        // 删除 T5, T6 以供溢出使用
         vec![
-            T0, T1, T2, T3, T4, T5, T6, S0, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, A0, A1,
+            T0, T1, T2, T3, T4, S0, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, A0, A1,
             A2, A3, A4, A5, A6, A7,
         ]
+    }
+
+    fn spill_scratch_regs() -> &'static [Self::PhysicalReg]
+    where
+        Self: Sized,
+    {
+        &[RV32Reg::T5, RV32Reg::T6]
+    }
+
+    fn is_callee_saved(reg: Self::PhysicalReg) -> bool {
+        matches!(
+            reg,
+            RV32Reg::S0
+                | RV32Reg::S1
+                | RV32Reg::S2
+                | RV32Reg::S3
+                | RV32Reg::S4
+                | RV32Reg::S5
+                | RV32Reg::S6
+                | RV32Reg::S7
+                | RV32Reg::S8
+                | RV32Reg::S9
+                | RV32Reg::S10
+                | RV32Reg::S11
+        )
     }
 }
 
@@ -345,6 +371,13 @@ impl TargetInst for RV32Inst {
         Self: Sized,
     {
         self.rewrite_vreg(use_rewrites, def_rewrites)
+    }
+    
+    fn is_call(&self) -> bool {
+        match self {
+            RV32Inst::Call { .. } => true,
+            _ => false,
+        }
     }
 }
 

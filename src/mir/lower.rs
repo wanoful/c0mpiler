@@ -1243,6 +1243,8 @@ fn empty_machine_function<T: TargetArch>(name: String) -> MachineFunction<T> {
             stack_slots: Vec::new(),
             max_align: 1,
             max_outgoing_arg_size: 0,
+            used_callee_saved: HashSet::new(),
+            need_save_ra: false,
         },
         frame_layout: FrameLayout {
             frame_size: 0,

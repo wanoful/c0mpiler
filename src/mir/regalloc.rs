@@ -105,14 +105,14 @@ impl<T: LoweringTarget> Lowerer<T> {
     fn compute_spill(
         &self,
         machine_function: &MachineFunction<T>,
-    ) -> (HashSet<VRegId>, HashMap<VRegId, T::PhysicalReg>) {
+    ) -> (Vec<VRegId>, HashMap<VRegId, T::PhysicalReg>) {
         let liveness_info = self.liveness_analysis(machine_function);
 
         let graph = InterferenceGraph::build(machine_function, &liveness_info);
         let stack = graph.simplify();
 
         let mut assigned_regs: HashMap<VRegId, T::PhysicalReg> = HashMap::new();
-        let mut spill = HashSet::new();
+        let mut spill_candidates = Vec::new();
 
         for vreg_id in stack.into_iter().rev() {
             let mut available_regs: HashSet<T::PhysicalReg> =
@@ -130,16 +130,16 @@ impl<T: LoweringTarget> Lowerer<T> {
             if let Some(&reg) = available_regs.iter().next() {
                 assigned_regs.insert(vreg_id, reg);
             } else {
-                spill.insert(vreg_id);
+                spill_candidates.push(vreg_id);
             }
         }
-        (spill, assigned_regs)
+        (spill_candidates, assigned_regs)
     }
 
     pub(crate) fn register_allocation(&self, machine_function: &mut MachineFunction<T>) {
         let (mut spill, mut assigned_regs) = self.compute_spill(machine_function);
         while !spill.is_empty() {
-            self.spill_vreg(spill, machine_function);
+            self.spill_vreg(*spill.first().unwrap(), machine_function);
             (spill, assigned_regs) = self.compute_spill(machine_function);
         }
 
@@ -152,71 +152,68 @@ impl<T: LoweringTarget> Lowerer<T> {
                 *inst = inst.rewrite_vreg(&assigned_regs, &assigned_regs);
             }
         }
+
+        self.callee_saved_scan(machine_function);
     }
 
-    fn spill_vreg(&self, vreg_ids: HashSet<VRegId>, machine_function: &mut MachineFunction<T>) {
-        let slots = vreg_ids
-            .iter()
-            .map(|id| {
-                (
-                    id,
-                    machine_function.new_stack_slot(
-                        T::WORD_SIZE,
-                        T::WORD_SIZE,
-                        StackSlotKind::Spill,
-                    ),
-                )
-            })
-            .collect::<HashMap<_, _>>();
+    fn callee_saved_scan(&self, machine_function: &mut MachineFunction<T>) {
+        let mut used_callee_saved = HashSet::new();
+        let mut need_save_ra = false;
+        for block in machine_function.blocks.iter() {
+            for inst in block.instructions.iter() {
+                need_save_ra |= inst.is_call();
+                for r in inst.def_regs().iter() {
+                    if let Register::Physical(phy) = r {
+                        if T::is_callee_saved(*phy) {
+                            used_callee_saved.insert(*phy);
+                        }
+                    }   
+                }
+            }
+        }
+        machine_function.frame_info.used_callee_saved = used_callee_saved;
+        machine_function.frame_info.need_save_ra = need_save_ra;
+    }
+
+    fn spill_vreg(&self, vreg_id: VRegId, machine_function: &mut MachineFunction<T>) {
+        let slot =
+            machine_function.new_stack_slot(T::WORD_SIZE, T::WORD_SIZE, StackSlotKind::Spill);
+
+        let sratch_regs = T::spill_scratch_regs();
+        debug_assert!(sratch_regs.len() >= 2, "Need at least 2 scratch registers for spilling");
 
         for block in machine_function.blocks.iter_mut() {
             let mut new_insts = Vec::new();
 
             for inst in block.instructions.iter() {
-                let uses_spilled: HashSet<_> = inst
-                    .use_regs()
-                    .iter()
-                    .filter_map(|r| match r {
-                        super::Register::Virtual(vreg_id) => {
-                            slots.contains_key(vreg_id).then_some(vreg_id)
-                        }
-                        super::Register::Physical(_) => None,
-                    })
-                    .cloned()
-                    .collect();
-                let defs_spilled: HashSet<_> = inst
-                    .def_regs()
-                    .iter()
-                    .filter_map(|r| match r {
-                        super::Register::Virtual(vreg_id) => {
-                            slots.contains_key(vreg_id).then_some(vreg_id)
-                        }
-                        super::Register::Physical(_) => None,
-                    })
-                    .cloned()
-                    .collect();
+                let uses_spilled = inst.use_regs().iter().any(|r| match r {
+                    Register::Virtual(v) => *v == vreg_id,
+                    Register::Physical(_) => false,
+                });
+                let defs_spilled = inst.def_regs().iter().any(|r| match r {
+                    Register::Virtual(v) => *v == vreg_id,
+                    Register::Physical(_) => false,
+                });
 
                 let mut use_map = HashMap::new();
                 let mut def_map = HashMap::new();
 
-                for use_spilled in uses_spilled.iter() {
-                    let temp_in = machine_function.vreg_counter.next();
-                    let slot = slots[use_spilled];
-                    new_insts.push(T::emit_load_stack_slot(Register::Virtual(temp_in), slot));
-                    use_map.insert(*use_spilled, Register::Virtual(temp_in));
+                if uses_spilled {
+                    let temp_in = Register::Physical(sratch_regs[0]);
+                    new_insts.push(T::emit_load_stack_slot(temp_in, slot));
+                    use_map.insert(vreg_id, temp_in);
                 }
 
-                for def_spilled in defs_spilled.iter() {
-                    let temp_out = machine_function.vreg_counter.next();
-                    def_map.insert(*def_spilled, Register::Virtual(temp_out));
+                if defs_spilled {
+                    let temp_out = Register::Physical(sratch_regs[1]);
+                    def_map.insert(vreg_id, temp_out);
                 }
 
                 let rewritten = inst.rewrite_vreg(&use_map, &def_map);
                 new_insts.push(rewritten);
 
-                for def_spilled in defs_spilled.iter() {
-                    let temp_out = def_map[def_spilled];
-                    let slot = slots[def_spilled];
+                if defs_spilled {
+                    let temp_out = def_map[&vreg_id];
                     new_insts.push(T::emit_store_stack_slot(temp_out, slot));
                 }
             }
