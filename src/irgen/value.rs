@@ -216,6 +216,14 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     }
 
     pub(crate) fn get_core_value_by_index(&mut self, index: &ValueIndex) -> CoreValueKind {
+        self.try_get_core_value_by_index(index)
+            .unwrap_or_else(|| panic!("Can't get core value by index: {:?}", index))
+    }
+
+    pub(crate) fn try_get_core_value_by_index(
+        &self,
+        index: &ValueIndex,
+    ) -> Option<CoreValueKind> {
         if let ValueIndex::Place(PlaceValueIndex {
             name,
             kind:
@@ -230,14 +238,9 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         }) = index
             && name.0 == "len"
         {
-            CoreValueKind::LenMethod(len.unwrap())
+            Some(CoreValueKind::LenMethod(len.unwrap()))
         } else {
-            CoreValueKind::Normal(
-                self.core_value_indexes
-                    .get(index)
-                    .unwrap_or_else(|| panic!("Can't get core value by index: {:?}", index))
-                    .clone(),
-            )
+            self.core_value_indexes.get(index).cloned().map(CoreValueKind::Normal)
         }
     }
 
@@ -292,13 +295,12 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                     let head = self
                         .core_builder
                         .build_load(self.context.ptr_type().into(), value_ptr, None);
+                    let zero = ValueId::Const(self.core_module.borrow_mut().add_i32_const(0));
+                    let one = ValueId::Const(self.core_module.borrow_mut().add_i32_const(1));
                     let second_ptr = self.core_builder.build_getelementptr(
                         self.fat_ptr_type().into(),
                         value_ptr,
-                        vec![
-                            ValueId::Const(self.core_module.borrow_mut().add_i32_const(0)),
-                            ValueId::Const(self.core_module.borrow_mut().add_i32_const(1)),
-                        ],
+                        vec![zero, one],
                         None,
                     );
                     let fat = self
@@ -326,7 +328,8 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         let raw_type = self.core_module.borrow().value_ty(raw.value).clone();
         if let Some(fat) = raw.kind.as_raw().unwrap() {
             debug_assert!(
-                raw_type.is_ptr() && self.core_module.borrow().value_ty(*fat).is_int(),
+                (raw_type.is_ptr() || raw_type.is_array())
+                    && self.core_module.borrow().value_ty(*fat).is_int(),
                 "raw: {:?}\nfat: {:?}",
                 raw_type,
                 fat
@@ -334,14 +337,27 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
 
             let fat_ptr_type = self.fat_ptr_type();
             let allocated = self.build_core_alloca(fat_ptr_type.clone().into(), None);
-            self.core_builder.build_store(raw.value, allocated);
+            let zero = ValueId::Const(self.core_module.borrow_mut().add_i32_const(0));
+            let zero_idx = ValueId::Const(self.core_module.borrow_mut().add_i32_const(0));
+            let head = if raw_type.is_ptr() {
+                raw.value
+            } else if raw_type.is_array() {
+                ValueId::Inst(self.core_builder.build_getelementptr(
+                    raw_type.clone(),
+                    raw.value,
+                    vec![zero, zero_idx],
+                    None,
+                ))
+            } else {
+                panic!("raw: {:?}\nfat: {:?}", raw_type, fat);
+            };
+            self.core_builder.build_store(head, allocated);
+            let zero = ValueId::Const(self.core_module.borrow_mut().add_i32_const(0));
+            let one = ValueId::Const(self.core_module.borrow_mut().add_i32_const(1));
             let second = self.core_builder.build_getelementptr(
                 fat_ptr_type.clone().into(),
                 allocated,
-                vec![
-                    ValueId::Const(self.core_module.borrow_mut().add_i32_const(0)),
-                    ValueId::Const(self.core_module.borrow_mut().add_i32_const(1)),
-                ],
+                vec![zero, one],
                 None,
             );
             self.core_builder.build_store(*fat, ValueId::Inst(second));
@@ -381,13 +397,12 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
             CoreContainerKind::Raw { fat } => {
                 self.core_builder.build_store(src.value, dest);
                 if let Some(fat) = fat {
+                    let zero = ValueId::Const(self.core_module.borrow_mut().add_i32_const(0));
+                    let one = ValueId::Const(self.core_module.borrow_mut().add_i32_const(1));
                     let second = self.core_builder.build_getelementptr(
                         self.fat_ptr_type().into(),
                         dest,
-                        vec![
-                            ValueId::Const(self.core_module.borrow_mut().add_i32_const(0)),
-                            ValueId::Const(self.core_module.borrow_mut().add_i32_const(1)),
-                        ],
+                        vec![zero, one],
                         None,
                     );
                     self.core_builder.build_store(fat, ValueId::Inst(second));

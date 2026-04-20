@@ -43,6 +43,7 @@ pub struct IRGenerator<'ast, 'analyzer> {
 
     pub(crate) value_indexes: HashMap<ValueIndex, ValuePtrContainer>,
     pub(crate) core_value_indexes: HashMap<ValueIndex, CoreValueContainer>,
+    pub(crate) core_expr_values: HashMap<NodeId, CoreValueContainer>,
 }
 
 impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
@@ -57,6 +58,7 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         let core_alloca_builder = CursorBuilder::new(core_module.clone());
         let mut value_indexes = HashMap::default();
         let mut core_value_indexes = HashMap::default();
+        let core_expr_values = HashMap::default();
 
         add_preludes(&context, &mut builder, &mut module, &mut value_indexes);
         add_core_preludes(&context, &mut core_builder, &mut core_value_indexes);
@@ -72,6 +74,7 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
             analyzer,
             value_indexes,
             core_value_indexes,
+            core_expr_values,
         };
 
         generator.add_struct_type();
@@ -484,6 +487,18 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
 
     pub fn build_core_alloca(&mut self, ty: TypePtr, name: Option<&str>) -> ValueId {
         ValueId::Inst(self.core_alloca_builder.build_alloca(ty, name))
+    }
+
+    pub(crate) fn set_core_expr_value(&mut self, expr_id: NodeId, value: CoreValueContainer) {
+        self.core_expr_values.insert(expr_id, value);
+    }
+
+    pub(crate) fn get_core_expr_value(&self, expr_id: &NodeId) -> Option<CoreValueContainer> {
+        self.core_expr_values.get(expr_id).cloned()
+    }
+
+    pub(crate) fn clear_core_expr_value(&mut self, expr_id: &NodeId) {
+        self.core_expr_values.remove(expr_id);
     }
 }
 

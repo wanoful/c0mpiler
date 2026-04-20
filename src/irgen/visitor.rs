@@ -4,17 +4,21 @@ use crate::{
     ast::{BindingMode, Crate, Mutability, expr::*, item::*, pat::*, stmt::*},
     impossible,
     ir::{
+        core::ValueId,
         attribute::AttributeDiscriminants,
         globalxxx::FunctionPtr,
         ir_type::ArrayType,
         ir_value::{BasicBlockPtr, GlobalObjectPtr, ValuePtr},
     },
-    irgen::{
-        IRGenerator,
-        extra::{CycleInfo, ExprExtra, ItemExtra, PatExtra},
-        ty::TransformTypeConfig,
-        value::{ContainerKind, ValueKind, ValuePtrContainer},
-    },
+        irgen::{
+            IRGenerator,
+            extra::{CycleInfo, ExprExtra, ItemExtra, PatExtra},
+            ty::TransformTypeConfig,
+            value::{
+                ContainerKind, CoreContainerKind, CoreValueContainer, ValueKind,
+                ValuePtrContainer,
+            },
+        },
     semantics::{
         item::AssociatedInfo,
         resolved_ty::ResolvedTy,
@@ -134,6 +138,11 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
 
         let name_string = full_name.to_string();
         let fn_ptr = self.module.get_function(&name_string).expect(&name_string);
+        let core_fn = self
+            .core_module
+            .borrow()
+            .get_function(&name_string)
+            .expect(&name_string);
         let fn_intern = fn_value.value.ty;
         let fn_resolved_ty = self.analyzer.probe_type(fn_intern).unwrap();
 
@@ -160,18 +169,44 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
         let bb = self.context.append_basic_block(&fn_ptr, "entry");
         let loc = self.builder.get_location();
         let alloca_loc = self.alloca_builder.get_location();
+        let core_loc = self.core_builder.get_location();
+        let core_alloca_loc = self.core_alloca_builder.get_location();
         self.builder.locate_end(fn_ptr.clone(), bb.clone());
         self.alloca_builder.locate_front(fn_ptr.clone(), bb);
 
+        let core_bb = self.core_builder.append_block(core_fn, Some("entry"));
+        {
+            let mut module = self.core_module.borrow_mut();
+            module.func_mut(core_fn).entry = core_bb.block;
+        }
+        self.core_builder.locate_end(core_fn, core_bb);
+        self.core_alloca_builder.locate_front(core_fn, core_bb);
+
+        let core_args = self.core_module.borrow().args_in_order(core_fn);
+        let core_sret = self.core_module.borrow().func(core_fn).sret.clone();
+
         let mut args_iter = args.iter();
+        let mut core_args_iter = core_args.iter();
         for (arg_type, param) in zip(arg_types, &decl.inputs) {
             let arg = args_iter.next().unwrap();
+            let core_arg = *core_args_iter.next().unwrap();
             let kind = if arg_type.is_aggregate_type() {
-                ContainerKind::Ptr(arg_type)
+                ContainerKind::Ptr(arg_type.clone())
             } else {
                 ContainerKind::Raw {
                     fat: if arg_type.is_fat_ptr() {
                         Some(args_iter.next().unwrap().clone().into())
+                    } else {
+                        None
+                    },
+                }
+            };
+            let core_kind = if arg_type.is_aggregate_type() {
+                CoreContainerKind::Ptr(arg_type.clone())
+            } else {
+                CoreContainerKind::Raw {
+                    fat: if arg_type.is_fat_ptr() {
+                        Some(ValueId::Arg(*core_args_iter.next().unwrap()))
                     } else {
                         None
                     },
@@ -184,7 +219,10 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
                         value_ptr: arg.clone().into(),
                         kind,
                     },
-                    core_value: None,
+                    core_value: Some(CoreValueContainer {
+                        value: ValueId::Arg(core_arg),
+                        kind: core_kind,
+                    }),
                     self_id: 0,
                     is_temp_value: false,
                 },
@@ -201,23 +239,41 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
                 self_id: body.as_ref().unwrap().id,
                 cycle_info: None,
                 ret_ptr,
+                core_ret_ptr: core_sret
+                    .as_ref()
+                    .map(|_| ValueId::Arg(*core_args.first().unwrap())),
                 self_ty: self_ty.as_ref(),
             },
         );
 
         if let Some(value) = value {
+            let core_value = self.get_core_expr_value(&body.as_ref().unwrap().id);
             if let Some(ret_ptr) = ret_ptr {
                 self.store_to_ptr(ret_ptr.clone().into(), value);
+                if let (Some(core_ret_ptr), Some(core_value)) = (
+                    core_sret.as_ref().map(|_| ValueId::Arg(*core_args.first().unwrap())),
+                    core_value,
+                ) {
+                    self.core_store_to_ptr(core_ret_ptr, core_value);
+                    self.core_builder.build_return(None);
+                }
                 self.builder.build_return(None);
             } else {
+                if let Some(core_value) = core_value {
+                    let core_raw = self.core_get_raw_value(core_value);
+                    self.core_builder.build_return(Some(core_raw));
+                }
                 self.builder.build_return(Some(self.get_raw_value(value)));
             }
         } else {
             self.try_build_return(None, &body.as_ref().unwrap().id);
+            self.core_try_build_return(None, &body.as_ref().unwrap().id);
         }
 
         self.builder.set_location(loc);
         self.alloca_builder.set_location(alloca_loc);
+        self.core_builder.set_location(core_loc);
+        self.core_alloca_builder.set_location(core_alloca_loc);
     }
 
     fn visit_mod_item<'tmp>(
@@ -349,12 +405,16 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
                 ),
             ),
         };
+        let core_value = match kind {
+            LocalKind::Decl => None,
+            LocalKind::Init(expr) => self.get_core_expr_value(&expr.id),
+        };
 
         self.visit_pat(
             pat,
             PatExtra {
                 value,
-                core_value: None,
+                core_value,
                 self_id: 0,
                 is_temp_value,
             },
@@ -659,19 +719,45 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
     ) -> Self::ExprRes<'_> {
         let expr_value = self.visit_expr(expr, extra)?;
         let raw = self.get_raw_value(expr_value);
+        let core_expr_value = self.get_core_expr_value(&expr.id);
 
-        match un_op {
+        let value = match un_op {
             UnOp::Deref => {
                 // 此时 expr_value 的 raw 必定为指针类型
                 let ty = self
                     .transform_interned_ty_faithfully(self.analyzer.get_expr_type(&extra.self_id));
-                Some(ValuePtrContainer {
+                let value = ValuePtrContainer {
                     value_ptr: raw,
                     kind: ContainerKind::Ptr(ty),
-                })
+                };
+                if let Some(core_expr_value) = core_expr_value {
+                    let ty = self.transform_interned_ty_faithfully(
+                        self.analyzer.get_expr_type(&extra.self_id),
+                    );
+                    let core_raw = self.core_get_raw_value(core_expr_value);
+                    self.set_core_expr_value(
+                        extra.self_id,
+                        CoreValueContainer {
+                            value: core_raw,
+                            kind: CoreContainerKind::Ptr(ty),
+                        },
+                    );
+                }
+                Some(value)
             }
             UnOp::Not => {
                 let value = self.builder.build_bitwise_not(raw);
+                if let Some(core_expr_value) = core_expr_value {
+                    let raw = self.core_get_raw_value(core_expr_value);
+                    let value = self.core_builder.build_bitwise_not(raw);
+                    self.set_core_expr_value(
+                        extra.self_id,
+                        CoreValueContainer {
+                            value: ValueId::Inst(value),
+                            kind: CoreContainerKind::Raw { fat: None },
+                        },
+                    );
+                }
 
                 Some(ValuePtrContainer {
                     value_ptr: value.into(),
@@ -680,13 +766,26 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
             }
             UnOp::Neg => {
                 let value = self.builder.build_neg(raw);
+                if let Some(core_expr_value) = core_expr_value {
+                    let raw = self.core_get_raw_value(core_expr_value);
+                    let value = self.core_builder.build_neg(raw);
+                    self.set_core_expr_value(
+                        extra.self_id,
+                        CoreValueContainer {
+                            value: ValueId::Inst(value),
+                            kind: CoreContainerKind::Raw { fat: None },
+                        },
+                    );
+                }
 
                 Some(ValuePtrContainer {
                     value_ptr: value.into(),
                     kind: ContainerKind::Raw { fat: None },
                 })
             }
-        }
+        };
+
+        value
     }
 
     fn visit_lit_expr<'tmp>(
@@ -730,6 +829,58 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
             _ => impossible!(),
         };
 
+        let core_value = match kind {
+            LitKind::Bool => CoreValueContainer {
+                value: ValueId::Const(
+                    self.core_module
+                        .borrow_mut()
+                        .add_i1_const(*constant.as_constant_int().unwrap() != 0),
+                ),
+                kind: CoreContainerKind::Raw { fat: None },
+            },
+            LitKind::Char => CoreValueContainer {
+                value: ValueId::Const(
+                    self.core_module
+                        .borrow_mut()
+                        .add_int_const(8, *constant.as_constant_int().unwrap() as i64),
+                ),
+                kind: CoreContainerKind::Raw { fat: None },
+            },
+            LitKind::Integer => CoreValueContainer {
+                value: ValueId::Const(
+                    self.core_module
+                        .borrow_mut()
+                        .add_i32_const(*constant.as_constant_int().unwrap()),
+                ),
+                kind: CoreContainerKind::Raw { fat: None },
+            },
+            LitKind::Str | LitKind::StrRaw(_) => {
+                let string = constant.as_constant_string().unwrap();
+                let constant = self.core_module.borrow_mut().add_string_const(string.clone());
+                let ty = self.core_module.borrow().const_data(constant).ty.clone();
+                let global = self.core_module.borrow_mut().add_global(
+                    format!(".{}.str", extra.self_id),
+                    ty,
+                    crate::ir::core_value::GlobalKind::GlobalVariable {
+                        is_constant: true,
+                        initializer: Some(constant),
+                    },
+                );
+                CoreValueContainer {
+                    value: ValueId::Global(global),
+                    kind: CoreContainerKind::Raw {
+                        fat: Some(ValueId::Const(
+                            self.core_module
+                                .borrow_mut()
+                                .add_i32_const(string.len() as u32),
+                        )),
+                    },
+                }
+            }
+            _ => impossible!(),
+        };
+        self.set_core_expr_value(extra.self_id, core_value);
+
         Some(ValuePtrContainer {
             value_ptr: value,
             kind: ContainerKind::Raw {
@@ -752,12 +903,39 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
         let src_bits = expr_raw.get_type_as_int().unwrap().0;
         let target_bits = ty.as_int().unwrap().0;
         let value = if src_bits < target_bits {
-            self.builder.build_zext(expr_raw, ty, None).into()
+            self.builder.build_zext(expr_raw, ty.clone(), None).into()
         } else if src_bits == target_bits {
             expr_raw
         } else {
             impossible!()
         };
+
+        if let Some(core_expr_value) = self.get_core_expr_value(&expr.id) {
+            let core_raw = self.core_get_raw_value(core_expr_value.clone());
+            let src_bits = self
+                .core_module
+                .borrow()
+                .value_ty(core_raw)
+                .as_int()
+                .map(|x| x.0);
+            let target_bits = ty.as_int().map(|x| x.0);
+            if let (Some(src_bits), Some(target_bits)) = (src_bits, target_bits) {
+                let value = if src_bits < target_bits {
+                    ValueId::Inst(self.core_builder.build_zext(core_raw, ty.clone(), None))
+                } else if src_bits == target_bits {
+                    core_raw
+                } else {
+                    impossible!()
+                };
+                self.set_core_expr_value(
+                    extra.self_id,
+                    CoreValueContainer {
+                        value,
+                        kind: CoreContainerKind::Raw { fat: None },
+                    },
+                );
+            }
+        }
 
         Some(ValuePtrContainer {
             value_ptr: value,
@@ -1004,6 +1182,7 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
         extra: Self::ExprExtra<'tmp>,
     ) -> Self::ExprRes<'_> {
         let mut v = None;
+        let mut core_v = None;
 
         for stmt in stmts {
             let t = self.visit_stmt(
@@ -1023,12 +1202,22 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
             if interrupt.is_not() {
                 if let Some(i) = t {
                     let _ = v.insert(i);
+                    if let crate::semantics::stmt::StmtResult::Expr(expr_id) = result
+                        && let Some(core_value) = self.get_core_expr_value(&expr_id)
+                    {
+                        let _ = core_v.insert(core_value);
+                    }
                 }
             } else {
                 return None;
             }
         }
 
+        if let Some(core_value) = core_v {
+            self.set_core_expr_value(*id, core_value);
+        } else {
+            self.clear_core_expr_value(id);
+        }
         v
     }
 
@@ -1154,7 +1343,13 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
     ) -> Self::ExprRes<'_> {
         let result = self.analyzer.get_expr_result(&extra.self_id);
         let index = &result.value_index;
-        Some(self.get_value_by_index(index).into_normal().unwrap())
+        let value = self.get_value_by_index(index).into_normal().unwrap();
+        if let Some(core_kind) = self.try_get_core_value_by_index(index)
+            && let Ok(core_value) = core_kind.into_normal()
+        {
+            self.set_core_expr_value(extra.self_id, core_value);
+        }
+        Some(value)
     }
 
     fn visit_addr_of_expr<'tmp>(
@@ -1163,6 +1358,16 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
         extra: Self::ExprExtra<'tmp>,
     ) -> Self::ExprRes<'_> {
         let v = self.visit_expr(inner_expr, extra)?;
+        if let Some(core_value) = self.get_core_expr_value(&inner_expr.id) {
+            let core_ptr = self.core_get_value_ptr(core_value);
+            self.set_core_expr_value(
+                extra.self_id,
+                CoreValueContainer {
+                    value: core_ptr.value,
+                    kind: CoreContainerKind::Raw { fat: None },
+                },
+            );
+        }
         Some(ValuePtrContainer {
             value_ptr: self.get_value_ptr(v).value_ptr,
             kind: ContainerKind::Raw { fat: None },

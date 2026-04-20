@@ -7,13 +7,17 @@ use crate::{
     },
     impossible,
     ir::{
+        core::ValueId,
+        core_inst::{BinaryOpcode as CoreBinaryOpcode, ICmpCode as CoreICmpCode},
         ir_type::TypePtr,
         ir_value::{BasicBlockPtr, BinaryOpcode, ICmpCode, ValuePtr},
     },
     irgen::{
         IRGenerator,
         extra::ExprExtra,
-        value::{ContainerKind, ValueKind, ValuePtrContainer},
+        value::{
+            ContainerKind, CoreContainerKind, CoreValueContainer, ValueKind, ValuePtrContainer,
+        },
     },
     semantics::{analyzer::SemanticAnalyzer, visitor::Visitor},
 };
@@ -44,6 +48,29 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                 .collect();
             self.builder.build_call(func, args, None);
 
+            if let (Some(core_value1), Some(core_value2)) = (
+                self.get_core_expr_value(&expr1.id),
+                self.get_core_expr_value(&expr2.id),
+            ) {
+                let ret = self.build_core_alloca(string_ty.clone(), None);
+                let func = self.core_module.borrow().get_function("string_plus").unwrap();
+                let args = once(ret)
+                    .chain(
+                        vec![core_value1, core_value2]
+                            .into_iter()
+                            .flat_map(|x| self.core_get_value_presentation(x).flatten()),
+                    )
+                    .collect();
+                self.core_builder.build_call(func, args, None);
+                self.set_core_expr_value(
+                    extra.self_id,
+                    CoreValueContainer {
+                        value: ret,
+                        kind: CoreContainerKind::Ptr(string_ty.clone()),
+                    },
+                );
+            }
+
             Some(ValuePtrContainer {
                 value_ptr: ret.into(),
                 kind: ContainerKind::Ptr(string_ty),
@@ -53,6 +80,15 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
             let raw2 = self.get_raw_value(value2);
 
             let intern = self.analyzer.get_expr_type(&extra.self_id);
+            if let (Some(core_value1), Some(core_value2)) = (
+                self.get_core_expr_value(&expr1.id),
+                self.get_core_expr_value(&expr2.id),
+            ) {
+                let raw1 = self.core_get_raw_value(core_value1);
+                let raw2 = self.core_get_raw_value(core_value2);
+                let core_value = self.visit_binary_impl_core(bin_op, raw1, raw2, intern);
+                self.set_core_expr_value(extra.self_id, core_value);
+            }
 
             Some(self.visit_binary_impl(bin_op, raw1, raw2, intern))
         }
@@ -106,6 +142,57 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         ValuePtrContainer {
             value_ptr: value.into(),
             kind: ContainerKind::Raw { fat: None },
+        }
+    }
+
+    pub(crate) fn visit_binary_impl_core(
+        &mut self,
+        bin_op: BinOp,
+        raw1: ValueId,
+        raw2: ValueId,
+        intern: crate::semantics::resolved_ty::TypeIntern,
+    ) -> CoreValueContainer {
+        let resolved_ty = self.analyzer.probe_type(intern).unwrap();
+        let is_signed = resolved_ty.is_signed_integer();
+        let ty = self.transform_ty_faithfully(&resolved_ty);
+
+        let op_code = match bin_op {
+            BinOp::Add => CoreBinaryOpcode::Add,
+            BinOp::Sub => CoreBinaryOpcode::Sub,
+            BinOp::Mul => CoreBinaryOpcode::Mul,
+            BinOp::Div => {
+                if is_signed {
+                    CoreBinaryOpcode::SDiv
+                } else {
+                    CoreBinaryOpcode::UDiv
+                }
+            }
+            BinOp::Rem => {
+                if is_signed {
+                    CoreBinaryOpcode::SRem
+                } else {
+                    CoreBinaryOpcode::URem
+                }
+            }
+            BinOp::BitXor => CoreBinaryOpcode::Xor,
+            BinOp::BitAnd => CoreBinaryOpcode::And,
+            BinOp::BitOr => CoreBinaryOpcode::Or,
+            BinOp::Shl => CoreBinaryOpcode::Shl,
+            BinOp::Shr => {
+                if is_signed {
+                    CoreBinaryOpcode::AShr
+                } else {
+                    CoreBinaryOpcode::LShr
+                }
+            }
+            _ => impossible!(),
+        };
+
+        let value = self.core_builder.build_binary(op_code, ty, raw1, raw2, None);
+
+        CoreValueContainer {
+            value: ValueId::Inst(value),
+            kind: CoreContainerKind::Raw { fat: None },
         }
     }
 
@@ -163,6 +250,60 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
             self.get_raw_value(value2),
             None,
         );
+
+        if let (Some(core_value1), Some(core_value2)) = (
+            self.get_core_expr_value(&expr1.id),
+            self.get_core_expr_value(&expr2.id),
+        ) {
+            let op_code = match bin_op {
+                BinOp::Eq => CoreICmpCode::Eq,
+                BinOp::Lt => {
+                    if is_signed {
+                        CoreICmpCode::Slt
+                    } else {
+                        CoreICmpCode::Ult
+                    }
+                }
+                BinOp::Le => {
+                    if is_signed {
+                        CoreICmpCode::Sle
+                    } else {
+                        CoreICmpCode::Ule
+                    }
+                }
+                BinOp::Ne => CoreICmpCode::Ne,
+                BinOp::Ge => {
+                    if is_signed {
+                        CoreICmpCode::Sge
+                    } else {
+                        CoreICmpCode::Uge
+                    }
+                }
+                BinOp::Gt => {
+                    if is_signed {
+                        CoreICmpCode::Sgt
+                    } else {
+                        CoreICmpCode::Ugt
+                    }
+                }
+                _ => impossible!(),
+            };
+            let lhs = self.core_get_raw_value(core_value1);
+            let rhs = self.core_get_raw_value(core_value2);
+            let value = self.core_builder.build_icmp(
+                op_code,
+                lhs,
+                rhs,
+                None,
+            );
+            self.set_core_expr_value(
+                extra.self_id,
+                CoreValueContainer {
+                    value: ValueId::Inst(value),
+                    kind: CoreContainerKind::Raw { fat: None },
+                },
+            );
+        }
 
         Some(ValuePtrContainer {
             value_ptr: value.into(),
@@ -243,6 +384,13 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         let result = self.analyzer.get_expr_result(expr_id);
         if result.interrupt.is_not() {
             self.builder.build_return(value);
+        }
+    }
+
+    pub fn core_try_build_return(&mut self, value: Option<ValueId>, expr_id: &NodeId) {
+        let result = self.analyzer.get_expr_result(expr_id);
+        if result.interrupt.is_not() {
+            self.core_builder.build_return(value);
         }
     }
 
