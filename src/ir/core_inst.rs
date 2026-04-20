@@ -204,42 +204,39 @@ impl InstKind {
         }
     }
 
-    pub fn replace_operand(&mut self, slot: OperandSlot, new_value: ValueId) {
-        match (self, slot) {
-            (InstKind::Binary { lhs, .. }, OperandSlot::BinaryLhs) => *lhs = new_value,
-            (InstKind::Binary { rhs, .. }, OperandSlot::BinaryRhs) => *rhs = new_value,
-            (InstKind::Call { args, .. }, OperandSlot::CallArg(i)) => args[i] = new_value,
+    pub fn replace_operand(&mut self, slot: OperandSlot, new_value: ValueId) -> ValueId {
+        let ope = match (self, slot) {
+            (InstKind::Binary { lhs, .. }, OperandSlot::BinaryLhs) => lhs,
+            (InstKind::Binary { rhs, .. }, OperandSlot::BinaryRhs) => rhs,
+            (InstKind::Call { args, .. }, OperandSlot::CallArg(i)) => &mut args[i],
             (
                 InstKind::Branch {
                     cond: Some(cond), ..
                 },
                 OperandSlot::BranchCond,
-            ) => cond.cond = new_value,
-            (InstKind::GetElementPtr { base, .. }, OperandSlot::GEPBase) => *base = new_value,
-            (InstKind::GetElementPtr { indices, .. }, OperandSlot::GEPIndex(i)) => {
-                indices[i] = new_value
-            }
-            (InstKind::Load { ptr }, OperandSlot::LoadPtr) => *ptr = new_value,
-            (InstKind::Ret { value: Some(value) }, OperandSlot::RetVal) => *value = new_value,
-            (InstKind::Store { ptr, .. }, OperandSlot::StorePtr) => *ptr = new_value,
-            (InstKind::Store { value, .. }, OperandSlot::StoreVal) => *value = new_value,
-            (InstKind::ICmp { lhs, .. }, OperandSlot::ICmpLhs) => *lhs = new_value,
-            (InstKind::ICmp { rhs, .. }, OperandSlot::ICmpRhs) => *rhs = new_value,
+            ) => &mut cond.cond,
+            (InstKind::GetElementPtr { base, .. }, OperandSlot::GEPBase) => base,
+            (InstKind::GetElementPtr { indices, .. }, OperandSlot::GEPIndex(i)) => &mut indices[i],
+            (InstKind::Load { ptr }, OperandSlot::LoadPtr) => ptr,
+            (InstKind::Ret { value: Some(value) }, OperandSlot::RetVal) => value,
+            (InstKind::Store { ptr, .. }, OperandSlot::StorePtr) => ptr,
+            (InstKind::Store { value, .. }, OperandSlot::StoreVal) => value,
+            (InstKind::ICmp { lhs, .. }, OperandSlot::ICmpLhs) => lhs,
+            (InstKind::ICmp { rhs, .. }, OperandSlot::ICmpRhs) => rhs,
             (InstKind::Phi { incomings, .. }, OperandSlot::PhiIncomingVal(i)) => {
-                incomings[i].value = new_value
+                &mut incomings[i].value
             }
-            (InstKind::Select { cond, .. }, OperandSlot::SelectCond) => *cond = new_value,
-            (InstKind::Select { then_val, .. }, OperandSlot::SelectThenVal) => {
-                *then_val = new_value
-            }
-            (InstKind::Select { else_val, .. }, OperandSlot::SelectElseVal) => {
-                *else_val = new_value
-            }
-            (InstKind::PtrToInt { ptr }, OperandSlot::PtrToIntPtr) => *ptr = new_value,
-            (InstKind::Trunc { value }, OperandSlot::TruncVal) => *value = new_value,
-            (InstKind::Zext { value }, OperandSlot::ZextVal) => *value = new_value,
-            (InstKind::Sext { value }, OperandSlot::SextVal) => *value = new_value,
+            (InstKind::Select { cond, .. }, OperandSlot::SelectCond) => cond,
+            (InstKind::Select { then_val, .. }, OperandSlot::SelectThenVal) => then_val,
+            (InstKind::Select { else_val, .. }, OperandSlot::SelectElseVal) => else_val,
+            (InstKind::PtrToInt { ptr }, OperandSlot::PtrToIntPtr) => ptr,
+            (InstKind::Trunc { value }, OperandSlot::TruncVal) => value,
+            (InstKind::Zext { value }, OperandSlot::ZextVal) => value,
+            (InstKind::Sext { value }, OperandSlot::SextVal) => value,
             _ => panic!("Invalid operand slot for instruction kind"),
-        }
+        };
+        let old = *ope;
+        *ope = new_value;
+        old
     }
 }

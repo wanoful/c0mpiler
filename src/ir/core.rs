@@ -4,7 +4,6 @@ use crate::ir::{
     core_inst::{InstKind, OperandSlot, PhiIncoming},
     core_value::{ConstKind, GlobalKind},
     ir_type::{FunctionTypePtr, TypePtr},
-    ir_value::Value,
 };
 
 new_key_type! {
@@ -107,6 +106,14 @@ pub enum InstPosition {
 }
 
 impl ModuleCore {
+    pub fn new() -> Self {
+        Self {
+            functions: SlotMap::with_key(),
+            globals: SlotMap::with_key(),
+            consts: SlotMap::with_key(),
+        }
+    }
+
     pub(crate) fn func(&self, f: FunctionId) -> &FunctionData {
         &self.functions[f]
     }
@@ -179,7 +186,37 @@ impl ModuleCore {
         }
     }
 
-    fn new_inst(
+    pub(crate) fn create_function(&mut self, name: String, ty: FunctionTypePtr) -> FunctionId {
+        let func = self.functions.insert_with_key(|_| FunctionData {
+            name,
+            ty,
+            args: SlotMap::with_key(),
+            blocks: SlotMap::with_key(),
+            insts: SlotMap::with_key(),
+            block_order: Vec::new(),
+            entry: BlockId::default(),
+        });
+        let entry = self.append_block(func, Some("entry".to_string()));
+        self.func_mut(func).entry = entry.block;
+        func
+    }
+
+    pub(crate) fn append_arg(
+        &mut self,
+        func: FunctionId,
+        ty: TypePtr,
+        name: Option<String>,
+    ) -> ArgRef {
+        let arg = self.func_mut(func).args.insert(ArgData {
+            name,
+            ty,
+            parent: func,
+            uses: Vec::new(),
+        });
+        ArgRef { func, arg }
+    }
+
+    pub(crate) fn new_inst(
         &mut self,
         func: FunctionId,
         ty: TypePtr,
@@ -199,7 +236,7 @@ impl ModuleCore {
         }
     }
 
-    fn append_block(&mut self, func: FunctionId, name: Option<String>) -> BlockRef {
+    pub(crate) fn append_block(&mut self, func: FunctionId, name: Option<String>) -> BlockRef {
         let block_id = self.func_mut(func).blocks.insert(BlockData {
             name,
             phis: Vec::new(),
@@ -215,13 +252,33 @@ impl ModuleCore {
         block_ref
     }
 
+    fn assert_can_insert(&self, block: BlockRef, inst: InstRef) {
+        assert_eq!(
+            block.func, inst.func,
+            "The instruction and the block must belong to the same function"
+        );
+        assert!(
+            self.inst(inst).parent.is_none(),
+            "The instruction already has a parent block"
+        );
+    }
+
     pub(crate) fn append_inst(&mut self, block: BlockRef, inst: InstRef) {
+        self.assert_can_insert(block, inst);
+        assert!(!self.inst(inst).kind.is_phi() && !self.inst(inst).kind.is_terminator());
+        assert!(
+            self.block(block).terminator.is_none(),
+            "Cannot append instructions after a terminator"
+        );
         self.block_mut(block).insts.push(inst.inst);
         self.inst_mut(inst).parent = Some(block);
         self.register_inst_use(inst);
     }
 
     pub(crate) fn push_front_inst(&mut self, block: BlockRef, inst: InstRef) {
+        self.assert_can_insert(block, inst);
+        assert!(!self.inst(inst).kind.is_phi() && !self.inst(inst).kind.is_terminator());
+
         self.block_mut(block).insts.insert(0, inst.inst);
         self.inst_mut(inst).parent = Some(block);
         self.register_inst_use(inst);
@@ -229,6 +286,7 @@ impl ModuleCore {
 
     pub(crate) fn insert_before(&mut self, anchor: InstRef, inst: InstRef) {
         let parent = self.inst(anchor).parent.unwrap();
+        self.assert_can_insert(parent, inst);
         match self.locate_inst(anchor) {
             InstPosition::Phi(i) => {
                 debug_assert!(self.inst(inst).kind.is_phi());
@@ -254,6 +312,7 @@ impl ModuleCore {
 
     pub(crate) fn insert_after(&mut self, anchor: InstRef, inst: InstRef) {
         let parent = self.inst(anchor).parent.unwrap();
+        self.assert_can_insert(parent, inst);
         match self.locate_inst(anchor) {
             InstPosition::Phi(i) => {
                 debug_assert!(self.inst(inst).kind.is_phi());
@@ -275,18 +334,43 @@ impl ModuleCore {
     }
 
     pub(crate) fn append_phi(&mut self, block: BlockRef, inst: InstRef) {
+        self.assert_can_insert(block, inst);
+        assert!(self.inst(inst).kind.is_phi());
+        assert!(
+            self.block(block).insts.is_empty(),
+            "Phi nodes must be placed before all other instructions in the block"
+        );
+        assert!(
+            self.block(block).terminator.is_none(),
+            "Phi nodes cannot be placed in a block with a terminator"
+        );
         self.block_mut(block).phis.push(inst.inst);
         self.inst_mut(inst).parent = Some(block);
         self.register_inst_use(inst);
     }
 
     pub(crate) fn set_terminator(&mut self, block: BlockRef, inst: InstRef) {
+        self.assert_can_insert(block, inst);
+        assert!(self.inst(inst).kind.is_terminator());
+        assert!(
+            self.block(block).terminator.is_none(),
+            "A block cannot have more than one terminator"
+        );
         self.block_mut(block).terminator = Some(inst.inst);
         self.inst_mut(inst).parent = Some(block);
         self.register_inst_use(inst);
     }
 
     pub fn append_to_block(&mut self, block: BlockRef, inst: InstRef) {
+        assert!(
+            self.inst(inst).parent.is_none(),
+            "The instruction already has a parent block"
+        );
+        assert_eq!(
+            block.func, inst.func,
+            "The instruction and the block must belong to the same function"
+        );
+
         let kind = &self.inst(inst).kind;
 
         if kind.is_phi() {
@@ -330,7 +414,7 @@ impl ModuleCore {
         self.inst_mut(inst).parent = None;
     }
 
-    fn erase_inst_from_parent(&mut self, inst: InstRef) {
+    pub(crate) fn erase_inst_from_parent(&mut self, inst: InstRef) {
         let value = ValueId::Inst(inst);
         assert!(
             self.value_uses(value).is_empty(),
@@ -361,78 +445,115 @@ impl ModuleCore {
         });
     }
 
-    fn replace_inst_operand(&mut self, inst: InstRef, slot: OperandSlot, new_value: ValueId) {
-        self.inst_mut(inst).kind.replace_operand(slot, new_value);
+    pub(crate) fn replace_inst_operand(
+        &mut self,
+        inst: InstRef,
+        slot: OperandSlot,
+        new_value: ValueId,
+    ) {
+        let old_value = self.inst_mut(inst).kind.replace_operand(slot, new_value);
+
+        self.value_uses_mut(old_value)
+            .retain(|u| !(u.user == inst && u.slot == slot));
+        self.value_uses_mut(new_value)
+            .push(Use { user: inst, slot });
     }
 
-    fn replace_all_uses_with(&mut self, old: ValueId, new: ValueId) {
+    pub(crate) fn replace_all_uses_with(&mut self, old: ValueId, new: ValueId) {
         assert_ne!(old, new, "Cannot replace a value with itself");
 
         let uses = self.value_uses(old).to_vec();
         for u in &uses {
-            self.inst_mut(u.user).kind.replace_operand(u.slot, new);
-            self.value_uses_mut(new).push(*u);
+            self.replace_inst_operand(u.user, u.slot, new);
         }
-        self.value_uses_mut(old).clear();
     }
 
-    fn branch_set_then(&mut self, branch: InstRef, new_then: BlockId) {
+    pub(crate) fn branch_set_then(&mut self, branch: InstRef, new_then: BlockRef) {
+        assert_eq!(branch.func, new_then.func);
         match &mut self.inst_mut(branch).kind {
-            InstKind::Branch {
-                cond: Some(cond_branch),
-                ..
-            } => {
-                cond_branch.else_block = new_then;
+            InstKind::Branch { then_block, .. } => {
+                *then_block = new_then.block;
             }
             _ => panic!("Expected a conditional branch instruction"),
         }
     }
 
-    fn branch_set_else(&mut self, branch: InstRef, new_else: BlockId) {
+    pub(crate) fn branch_set_else(&mut self, branch: InstRef, new_else: BlockRef) {
+        assert_eq!(branch.func, new_else.func);
         match &mut self.inst_mut(branch).kind {
             InstKind::Branch {
                 cond: Some(cond_branch),
                 ..
             } => {
-                cond_branch.else_block = new_else;
+                cond_branch.else_block = new_else.block;
             }
             _ => panic!("Expected a conditional branch instruction"),
         }
     }
 
-    fn phi_add_incoming(&mut self, phi: InstRef, block: BlockId, value: ValueId) {
+    pub(crate) fn phi_add_incoming(&mut self, phi: InstRef, block: BlockRef, value: ValueId) {
+        assert_eq!(phi.func, block.func);
         match &mut self.inst_mut(phi).kind {
             InstKind::Phi { incomings } => {
-                incomings.push(PhiIncoming { block, value });
+                let slot = OperandSlot::PhiIncomingVal(incomings.len());
+                incomings.push(PhiIncoming {
+                    block: block.block,
+                    value,
+                });
+                self.value_uses_mut(value).push(Use { user: phi, slot });
             }
             _ => panic!("Expected a phi instruction"),
         }
     }
 
-    fn phi_set_incoming_value(&mut self, phi: InstRef, incoming_index: usize, new_value: ValueId) {
+    pub(crate) fn phi_set_incoming_value(
+        &mut self,
+        phi: InstRef,
+        incoming_index: usize,
+        new_value: ValueId,
+    ) {
         match &mut self.inst_mut(phi).kind {
             InstKind::Phi { incomings } => {
+                let value = incomings[incoming_index].value;
                 incomings[incoming_index].value = new_value;
+                self.value_uses_mut(value).retain(|u| {
+                    !(u.user == phi && u.slot == OperandSlot::PhiIncomingVal(incoming_index))
+                });
+                self.value_uses_mut(new_value).push(Use {
+                    user: phi,
+                    slot: OperandSlot::PhiIncomingVal(incoming_index),
+                });
             }
             _ => panic!("Expected a phi instruction"),
         }
     }
 
-    fn phi_set_incoming_block(&mut self, phi: InstRef, incoming_index: usize, new_block: BlockId) {
+    pub(crate) fn phi_set_incoming_block(
+        &mut self,
+        phi: InstRef,
+        incoming_index: usize,
+        new_block: BlockRef,
+    ) {
+        assert_eq!(phi.func, new_block.func);
         match &mut self.inst_mut(phi).kind {
             InstKind::Phi { incomings } => {
-                incomings[incoming_index].block = new_block;
+                incomings[incoming_index].block = new_block.block;
             }
             _ => panic!("Expected a phi instruction"),
         }
     }
 
-    fn phi_remove_incoming_from(&mut self, phi: InstRef, incoming_index: usize) {
+    pub(crate) fn phi_remove_incoming_from(&mut self, phi: InstRef, incoming_index: usize) {
         match &mut self.inst_mut(phi).kind {
             InstKind::Phi { incomings } => {
+                let value = incomings[incoming_index].value;
                 incomings.remove(incoming_index);
 
                 let cloned = incomings.clone();
+
+                self.value_uses_mut(value).retain(|u| {
+                    !(u.user == phi && u.slot == OperandSlot::PhiIncomingVal(incoming_index))
+                });
 
                 for i in incoming_index..cloned.len() {
                     let id = cloned[i].value;
@@ -447,39 +568,46 @@ impl ModuleCore {
         }
     }
 
-    fn successors(&self, inst: InstRef) -> Vec<BlockId> {
+    pub(crate) fn successors(&self, inst: InstRef) -> Vec<BlockRef> {
+        let block_ref = |block_id: BlockId| BlockRef {
+            func: inst.func,
+            block: block_id,
+        };
+
         match &self.inst(inst).kind {
             InstKind::Branch {
                 cond: Some(cond_branch),
                 then_block,
-            } => vec![cond_branch.else_block, *then_block],
+            } => vec![block_ref(cond_branch.else_block), block_ref(*then_block)],
             InstKind::Branch {
                 cond: None,
                 then_block,
-            } => vec![*then_block],
+            } => vec![block_ref(*then_block)],
             _ => vec![],
         }
     }
 
-    fn replace_successor(&mut self, inst: InstRef, old: BlockId, new: BlockId) {
+    pub(crate) fn replace_successor(&mut self, inst: InstRef, old: BlockRef, new: BlockRef) {
+        assert_eq!(inst.func, old.func);
+        assert_eq!(inst.func, new.func);
         match &mut self.inst_mut(inst).kind {
             InstKind::Branch {
                 cond: Some(cond_branch),
                 then_block,
             } => {
-                if cond_branch.else_block == old {
-                    cond_branch.else_block = new;
+                if cond_branch.else_block == old.block {
+                    cond_branch.else_block = new.block;
                 }
-                if *then_block == old {
-                    *then_block = new;
+                if *then_block == old.block {
+                    *then_block = new.block;
                 }
             }
             InstKind::Branch {
                 cond: None,
                 then_block,
             } => {
-                if *then_block == old {
-                    *then_block = new;
+                if *then_block == old.block {
+                    *then_block = new.block;
                 }
             }
             _ => {}
