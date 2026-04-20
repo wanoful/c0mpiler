@@ -1,9 +1,19 @@
+use std::{collections::HashMap, rc::Rc};
+
 use slotmap::{SlotMap, new_key_type};
 
 use crate::ir::{
+    attribute::AttributeDiscriminants,
     core_inst::{InstKind, OperandSlot, PhiIncoming},
     core_value::{ConstKind, GlobalKind},
     ir_type::{FunctionTypePtr, TypePtr},
+    ir_value::{
+        Constant, ConstantPtr, ICmpCode as LegacyICmpCode,
+        InstructionKind as LegacyInstructionKind, InstructionPtr, Value, ValuePtr,
+    },
+    ir_value::BinaryOpcode as LegacyBinaryOpcode,
+    layout::TargetDataLayout,
+    LLVMModule,
 };
 
 new_key_type! {
@@ -45,6 +55,8 @@ pub struct ModuleCore {
     functions: SlotMap<FunctionId, FunctionData>,
     globals: SlotMap<GlobalId, GlobalData>,
     consts: SlotMap<ConstId, ConstData>,
+    pub(crate) named_structs: HashMap<String, TypePtr>,
+    pub(crate) target_data_layout: Option<TargetDataLayout>,
 }
 
 pub struct FunctionData {
@@ -55,6 +67,8 @@ pub struct FunctionData {
     pub insts: SlotMap<InstId, InstData>,
     pub block_order: Vec<BlockId>,
     pub entry: BlockId,
+    pub sret: Option<TypePtr>,
+    pub is_declare: bool,
 }
 
 pub struct BlockData {
@@ -111,6 +125,8 @@ impl ModuleCore {
             functions: SlotMap::with_key(),
             globals: SlotMap::with_key(),
             consts: SlotMap::with_key(),
+            named_structs: HashMap::new(),
+            target_data_layout: None,
         }
     }
 
@@ -119,6 +135,18 @@ impl ModuleCore {
     }
     pub(crate) fn func_mut(&mut self, f: FunctionId) -> &mut FunctionData {
         &mut self.functions[f]
+    }
+
+    pub(crate) fn functions_in_order(&self) -> Vec<FunctionId> {
+        let mut functions = self.functions.keys().collect::<Vec<_>>();
+        functions.sort_by(|lhs, rhs| self.func(*lhs).name.cmp(&self.func(*rhs).name));
+        functions
+    }
+
+    pub(crate) fn globals_in_order(&self) -> Vec<GlobalId> {
+        let mut globals = self.globals.keys().collect::<Vec<_>>();
+        globals.sort_by(|lhs, rhs| self.global(*lhs).name.cmp(&self.global(*rhs).name));
+        globals
     }
 
     pub(crate) fn block(&self, b: BlockRef) -> &BlockData {
@@ -140,6 +168,62 @@ impl ModuleCore {
     }
     pub(crate) fn arg_mut(&mut self, a: ArgRef) -> &mut ArgData {
         &mut self.functions[a.func].args[a.arg]
+    }
+
+    pub(crate) fn global(&self, g: GlobalId) -> &GlobalData {
+        &self.globals[g]
+    }
+
+    pub(crate) fn const_data(&self, c: ConstId) -> &ConstData {
+        &self.consts[c]
+    }
+
+    pub(crate) fn args_in_order(&self, func: FunctionId) -> Vec<ArgRef> {
+        self.func(func)
+            .args
+            .keys()
+            .map(|arg| ArgRef { func, arg })
+            .collect()
+    }
+
+    pub(crate) fn blocks_in_order(&self, func: FunctionId) -> Vec<BlockRef> {
+        self.func(func)
+            .block_order
+            .iter()
+            .copied()
+            .map(|block| BlockRef { func, block })
+            .collect()
+    }
+
+    pub(crate) fn phis_in_order(&self, block: BlockRef) -> Vec<InstRef> {
+        self.block(block)
+            .phis
+            .iter()
+            .copied()
+            .map(|inst| InstRef {
+                func: block.func,
+                inst,
+            })
+            .collect()
+    }
+
+    pub(crate) fn insts_in_order(&self, block: BlockRef) -> Vec<InstRef> {
+        self.block(block)
+            .insts
+            .iter()
+            .copied()
+            .map(|inst| InstRef {
+                func: block.func,
+                inst,
+            })
+            .collect()
+    }
+
+    pub(crate) fn terminator(&self, block: BlockRef) -> Option<InstRef> {
+        self.block(block).terminator.map(|inst| InstRef {
+            func: block.func,
+            inst,
+        })
     }
 
     pub(crate) fn value_ty(&self, value_id: ValueId) -> &TypePtr {
@@ -186,8 +270,8 @@ impl ModuleCore {
         }
     }
 
-    pub(crate) fn create_function(&mut self, name: String, ty: FunctionTypePtr) -> FunctionId {
-        let func = self.functions.insert_with_key(|_| FunctionData {
+    pub(crate) fn define_function(&mut self, name: String, ty: FunctionTypePtr) -> FunctionId {
+        self.functions.insert_with_key(|_| FunctionData {
             name,
             ty,
             args: SlotMap::with_key(),
@@ -195,10 +279,30 @@ impl ModuleCore {
             insts: SlotMap::with_key(),
             block_order: Vec::new(),
             entry: BlockId::default(),
-        });
+            sret: None,
+            is_declare: false,
+        })
+    }
+
+    pub(crate) fn create_function(&mut self, name: String, ty: FunctionTypePtr) -> FunctionId {
+        let func = self.define_function(name, ty);
         let entry = self.append_block(func, Some("entry".to_string()));
         self.func_mut(func).entry = entry.block;
         func
+    }
+
+    pub(crate) fn declare_function(&mut self, name: String, ty: FunctionTypePtr) -> FunctionId {
+        self.functions.insert_with_key(|_| FunctionData {
+            name,
+            ty,
+            args: SlotMap::with_key(),
+            blocks: SlotMap::with_key(),
+            insts: SlotMap::with_key(),
+            block_order: Vec::new(),
+            entry: BlockId::default(),
+            sret: None,
+            is_declare: true,
+        })
     }
 
     pub(crate) fn append_arg(
@@ -214,6 +318,32 @@ impl ModuleCore {
             uses: Vec::new(),
         });
         ArgRef { func, arg }
+    }
+
+    pub(crate) fn set_sret(&mut self, func: FunctionId, ty: TypePtr) {
+        self.func_mut(func).sret = Some(ty);
+    }
+
+    pub(crate) fn add_global(
+        &mut self,
+        name: String,
+        ty: TypePtr,
+        kind: GlobalKind,
+    ) -> GlobalId {
+        self.globals.insert(GlobalData {
+            name,
+            ty,
+            kind,
+            uses: Vec::new(),
+        })
+    }
+
+    pub(crate) fn add_const(&mut self, ty: TypePtr, kind: ConstKind) -> ConstId {
+        self.consts.insert(ConstData {
+            ty,
+            kind,
+            uses: Vec::new(),
+        })
     }
 
     pub(crate) fn new_inst(
@@ -611,6 +741,339 @@ impl ModuleCore {
                 }
             }
             _ => {}
+        }
+    }
+
+    pub fn from_legacy_module(module: &LLVMModule) -> Self {
+        let mut core = ModuleCore::new();
+        {
+            let ctx = module.ctx_impl.borrow();
+            core.target_data_layout = Some(ctx.type_layout_engine.target());
+            core.named_structs = ctx.named_strcut_ty.clone();
+        }
+
+        let mut const_map: HashMap<*const Value, ConstId> = HashMap::new();
+        let mut global_map: HashMap<*const Value, GlobalId> = HashMap::new();
+        let mut function_map: HashMap<*const Value, FunctionId> = HashMap::new();
+        let mut arg_map: HashMap<*const Value, ArgRef> = HashMap::new();
+        let mut block_map: HashMap<*const Value, BlockRef> = HashMap::new();
+        let mut inst_map: HashMap<*const Value, InstRef> = HashMap::new();
+
+        for func in module.functions_in_order() {
+            let name = func.get_name().unwrap();
+            let func_ty = FunctionTypePtr(func.as_global_object().get_inner_ty().clone());
+            let is_declare = func.as_function().blocks.borrow().is_empty();
+            let new_func = if is_declare {
+                core.declare_function(name.clone(), func_ty)
+            } else {
+                core.define_function(name.clone(), func_ty)
+            };
+
+            if let Some(attr) = func
+                .as_function()
+                .get_param_attr(0, AttributeDiscriminants::StructReturn)
+            {
+                core.set_sret(new_func, attr.into_struct_return().unwrap());
+            }
+
+            let func_value: ValuePtr = func.clone().into();
+            function_map.insert(Rc::as_ptr(&func_value), new_func);
+            let global = core.add_global(
+                name,
+                func_value.get_type().clone(),
+                GlobalKind::Function(new_func),
+            );
+            global_map.insert(Rc::as_ptr(&func_value), global);
+
+            for arg in func.as_function().args() {
+                let arg_ref = core.append_arg(new_func, arg.get_type().clone(), arg.get_name());
+                let arg_value: ValuePtr = arg.clone().into();
+                arg_map.insert(Rc::as_ptr(&arg_value), arg_ref);
+            }
+
+            if !is_declare {
+                for (index, block) in func.as_function().blocks.borrow().iter().enumerate() {
+                    let block_ref = core.append_block(new_func, block.get_name());
+                    if index == 0 {
+                        core.func_mut(new_func).entry = block_ref.block;
+                    }
+                    let block_value: ValuePtr = block.clone().into();
+                    block_map.insert(Rc::as_ptr(&block_value), block_ref);
+                }
+            }
+        }
+
+        for global in module.global_variables() {
+            let global_value: ValuePtr = global.clone().into();
+            let initializer = core.convert_legacy_const(
+                global.as_global_variable().initializer.clone(),
+                &mut const_map,
+            );
+            let new_global = core.add_global(
+                global.get_name().unwrap(),
+                global_value.get_type().clone(),
+                GlobalKind::GlobalVariable {
+                    is_constant: global.as_global_variable().is_constant,
+                    initializer: Some(initializer),
+                },
+            );
+            global_map.insert(Rc::as_ptr(&global_value), new_global);
+        }
+
+        for func in module.functions_in_order() {
+            if func.as_function().blocks.borrow().is_empty() {
+                continue;
+            }
+            let func_value: ValuePtr = func.clone().into();
+            let new_func = function_map[&Rc::as_ptr(&func_value)];
+
+            for block in func.as_function().blocks.borrow().iter() {
+                let instructions = block.as_basic_block().instructions.borrow();
+                for inst in instructions.iter() {
+                    let new_inst = core.new_inst(
+                        new_func,
+                        inst.get_type().clone(),
+                        InstKind::Unreachable,
+                        inst.get_name(),
+                    );
+                    let inst_value: ValuePtr = inst.clone().into();
+                    inst_map.insert(Rc::as_ptr(&inst_value), new_inst);
+                }
+            }
+        }
+
+        for func in module.functions_in_order() {
+            if func.as_function().blocks.borrow().is_empty() {
+                continue;
+            }
+
+            for block in func.as_function().blocks.borrow().iter() {
+                let block_value: ValuePtr = block.clone().into();
+                let new_block = block_map[&Rc::as_ptr(&block_value)];
+                let instructions = block.as_basic_block().instructions.borrow();
+                for inst in instructions.iter() {
+                    let inst_value: ValuePtr = inst.clone().into();
+                    let new_inst = inst_map[&Rc::as_ptr(&inst_value)];
+                    let kind = core.convert_legacy_inst_kind(
+                        inst,
+                        &mut const_map,
+                        &global_map,
+                        &arg_map,
+                        &block_map,
+                        &inst_map,
+                        &function_map,
+                    );
+                    core.inst_mut(new_inst).kind = kind;
+                    core.append_to_block(new_block, new_inst);
+                }
+            }
+        }
+
+        core
+    }
+
+    fn convert_legacy_const(
+        &mut self,
+        constant: ConstantPtr,
+        const_map: &mut HashMap<*const Value, ConstId>,
+    ) -> ConstId {
+        let value: ValuePtr = constant.clone().into();
+        let raw = Rc::as_ptr(&value);
+        if let Some(id) = const_map.get(&raw) {
+            return *id;
+        }
+
+        let kind = match constant.as_constant() {
+            Constant::ConstantInt(value) => ConstKind::Int(value.0 as i64),
+            Constant::ConstantArray(values) => ConstKind::Array(
+                values
+                    .0
+                    .iter()
+                    .cloned()
+                    .map(|value| self.convert_legacy_const(value, const_map))
+                    .collect(),
+            ),
+            Constant::ConstantStruct(values) => ConstKind::Struct(
+                values
+                    .0
+                    .iter()
+                    .cloned()
+                    .map(|value| self.convert_legacy_const(value, const_map))
+                    .collect(),
+            ),
+            Constant::ConstantString(value) => ConstKind::String(value.0.clone()),
+            Constant::ConstantNull(_) => ConstKind::Null,
+        };
+        let id = self.add_const(constant.get_type().clone(), kind);
+        const_map.insert(raw, id);
+        id
+    }
+
+    fn convert_legacy_value(
+        &mut self,
+        value: &ValuePtr,
+        const_map: &mut HashMap<*const Value, ConstId>,
+        global_map: &HashMap<*const Value, GlobalId>,
+        arg_map: &HashMap<*const Value, ArgRef>,
+        inst_map: &HashMap<*const Value, InstRef>,
+    ) -> ValueId {
+        let raw = Rc::as_ptr(value);
+        if let Some(global) = global_map.get(&raw) {
+            return ValueId::Global(*global);
+        }
+        if let Some(arg) = arg_map.get(&raw) {
+            return ValueId::Arg(*arg);
+        }
+        if let Some(inst) = inst_map.get(&raw) {
+            return ValueId::Inst(*inst);
+        }
+        if value.kind.as_constant().is_some() {
+            return ValueId::Const(self.convert_legacy_const(
+                ConstantPtr(value.clone()),
+                const_map,
+            ));
+        }
+        panic!("unsupported legacy value in conversion: {:?}", value);
+    }
+
+    fn convert_legacy_inst_kind(
+        &mut self,
+        inst: &InstructionPtr,
+        const_map: &mut HashMap<*const Value, ConstId>,
+        global_map: &HashMap<*const Value, GlobalId>,
+        arg_map: &HashMap<*const Value, ArgRef>,
+        block_map: &HashMap<*const Value, BlockRef>,
+        inst_map: &HashMap<*const Value, InstRef>,
+        function_map: &HashMap<*const Value, FunctionId>,
+    ) -> InstKind {
+        let operands = &inst.as_instruction().operands;
+        match &inst.as_instruction().kind {
+            LegacyInstructionKind::Binary(op) => InstKind::Binary {
+                op: match op {
+                    LegacyBinaryOpcode::Add => crate::ir::core_inst::BinaryOpcode::Add,
+                    LegacyBinaryOpcode::Sub => crate::ir::core_inst::BinaryOpcode::Sub,
+                    LegacyBinaryOpcode::Mul => crate::ir::core_inst::BinaryOpcode::Mul,
+                    LegacyBinaryOpcode::UDiv => crate::ir::core_inst::BinaryOpcode::UDiv,
+                    LegacyBinaryOpcode::SDiv => crate::ir::core_inst::BinaryOpcode::SDiv,
+                    LegacyBinaryOpcode::URem => crate::ir::core_inst::BinaryOpcode::URem,
+                    LegacyBinaryOpcode::SRem => crate::ir::core_inst::BinaryOpcode::SRem,
+                    LegacyBinaryOpcode::Shl => crate::ir::core_inst::BinaryOpcode::Shl,
+                    LegacyBinaryOpcode::LShr => crate::ir::core_inst::BinaryOpcode::LShr,
+                    LegacyBinaryOpcode::AShr => crate::ir::core_inst::BinaryOpcode::AShr,
+                    LegacyBinaryOpcode::And => crate::ir::core_inst::BinaryOpcode::And,
+                    LegacyBinaryOpcode::Or => crate::ir::core_inst::BinaryOpcode::Or,
+                    LegacyBinaryOpcode::Xor => crate::ir::core_inst::BinaryOpcode::Xor,
+                },
+                lhs: self.convert_legacy_value(&operands[0], const_map, global_map, arg_map, inst_map),
+                rhs: self.convert_legacy_value(&operands[1], const_map, global_map, arg_map, inst_map),
+            },
+            LegacyInstructionKind::Call => {
+                let func = function_map[&Rc::as_ptr(&operands[0])];
+                let args = operands[1..]
+                    .iter()
+                    .map(|value| {
+                        self.convert_legacy_value(value, const_map, global_map, arg_map, inst_map)
+                    })
+                    .collect();
+                InstKind::Call { func, args }
+            }
+            LegacyInstructionKind::Branch { has_cond } => {
+                if *has_cond {
+                    let cond = self.convert_legacy_value(
+                        &operands[0],
+                        const_map,
+                        global_map,
+                        arg_map,
+                        inst_map,
+                    );
+                    let then_block = block_map[&Rc::as_ptr(&operands[1])].block;
+                    let else_block = block_map[&Rc::as_ptr(&operands[2])].block;
+                    InstKind::Branch {
+                        then_block,
+                        cond: Some(crate::ir::core_inst::CondBranch { cond, else_block }),
+                    }
+                } else {
+                    let then_block = block_map[&Rc::as_ptr(&operands[0])].block;
+                    InstKind::Branch {
+                        then_block,
+                        cond: None,
+                    }
+                }
+            }
+            LegacyInstructionKind::GetElementPtr { base_ty } => InstKind::GetElementPtr {
+                base_ty: base_ty.clone(),
+                base: self.convert_legacy_value(&operands[0], const_map, global_map, arg_map, inst_map),
+                indices: operands[1..]
+                    .iter()
+                    .map(|value| {
+                        self.convert_legacy_value(value, const_map, global_map, arg_map, inst_map)
+                    })
+                    .collect(),
+            },
+            LegacyInstructionKind::Alloca { inner_ty } => InstKind::Alloca { ty: inner_ty.clone() },
+            LegacyInstructionKind::Load => InstKind::Load {
+                ptr: self.convert_legacy_value(&operands[0], const_map, global_map, arg_map, inst_map),
+            },
+            LegacyInstructionKind::Ret { is_void } => InstKind::Ret {
+                value: if *is_void {
+                    None
+                } else {
+                    Some(self.convert_legacy_value(
+                        &operands[0],
+                        const_map,
+                        global_map,
+                        arg_map,
+                        inst_map,
+                    ))
+                },
+            },
+            LegacyInstructionKind::Store => InstKind::Store {
+                value: self.convert_legacy_value(&operands[0], const_map, global_map, arg_map, inst_map),
+                ptr: self.convert_legacy_value(&operands[1], const_map, global_map, arg_map, inst_map),
+            },
+            LegacyInstructionKind::Icmp(op) => InstKind::ICmp {
+                op: match op {
+                    LegacyICmpCode::Eq => crate::ir::core_inst::ICmpCode::Eq,
+                    LegacyICmpCode::Ne => crate::ir::core_inst::ICmpCode::Ne,
+                    LegacyICmpCode::Ugt => crate::ir::core_inst::ICmpCode::Ugt,
+                    LegacyICmpCode::Uge => crate::ir::core_inst::ICmpCode::Uge,
+                    LegacyICmpCode::Ult => crate::ir::core_inst::ICmpCode::Ult,
+                    LegacyICmpCode::Ule => crate::ir::core_inst::ICmpCode::Ule,
+                    LegacyICmpCode::Sgt => crate::ir::core_inst::ICmpCode::Sgt,
+                    LegacyICmpCode::Sge => crate::ir::core_inst::ICmpCode::Sge,
+                    LegacyICmpCode::Slt => crate::ir::core_inst::ICmpCode::Slt,
+                    LegacyICmpCode::Sle => crate::ir::core_inst::ICmpCode::Sle,
+                },
+                lhs: self.convert_legacy_value(&operands[0], const_map, global_map, arg_map, inst_map),
+                rhs: self.convert_legacy_value(&operands[1], const_map, global_map, arg_map, inst_map),
+            },
+            LegacyInstructionKind::Phi => InstKind::Phi {
+                incomings: operands
+                    .chunks(2)
+                    .map(|pair| PhiIncoming {
+                        value: self.convert_legacy_value(&pair[0], const_map, global_map, arg_map, inst_map),
+                        block: block_map[&Rc::as_ptr(&pair[1])].block,
+                    })
+                    .collect(),
+            },
+            LegacyInstructionKind::Select => InstKind::Select {
+                cond: self.convert_legacy_value(&operands[0], const_map, global_map, arg_map, inst_map),
+                then_val: self.convert_legacy_value(&operands[1], const_map, global_map, arg_map, inst_map),
+                else_val: self.convert_legacy_value(&operands[2], const_map, global_map, arg_map, inst_map),
+            },
+            LegacyInstructionKind::PtrToInt => InstKind::PtrToInt {
+                ptr: self.convert_legacy_value(&operands[0], const_map, global_map, arg_map, inst_map),
+            },
+            LegacyInstructionKind::Trunc => InstKind::Trunc {
+                value: self.convert_legacy_value(&operands[0], const_map, global_map, arg_map, inst_map),
+            },
+            LegacyInstructionKind::Zext => InstKind::Zext {
+                value: self.convert_legacy_value(&operands[0], const_map, global_map, arg_map, inst_map),
+            },
+            LegacyInstructionKind::Sext => InstKind::Sext {
+                value: self.convert_legacy_value(&operands[0], const_map, global_map, arg_map, inst_map),
+            },
+            LegacyInstructionKind::Unreachable => InstKind::Unreachable,
         }
     }
 }

@@ -69,7 +69,7 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     }
 
     pub fn print(&self) -> String {
-        self.module.print()
+        crate::ir::core::ModuleCore::from_legacy_module(&self.module).print()
     }
 
     pub fn llvm_module(&self) -> &LLVMModule {

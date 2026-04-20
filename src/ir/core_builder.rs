@@ -161,7 +161,7 @@ impl<'a> IRBuilder<'a> {
         args: Vec<ValueId>,
         name: Option<&str>,
     ) -> InstRef {
-        let ret_ty = self.module.func(func).ty.0.clone();
+        let ret_ty = self.module.func(func).ty.0.as_function().unwrap().0.clone();
         self.build_inst(ret_ty, InstKind::Call { func, args }, name)
     }
 
