@@ -72,6 +72,10 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         self.module.print()
     }
 
+    pub fn llvm_module(&self) -> &LLVMModule {
+        &self.module
+    }
+
     fn absorb_analyzer_struct(&self, structs: &mut HashMap<TypeKey, ResolvedTy>) {
         self.absorb_scope_struct(0, structs);
     }

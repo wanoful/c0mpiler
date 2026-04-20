@@ -103,7 +103,7 @@ impl<T: TargetArch> ModulePrinter<'_, T> {
             return Ok(());
         }
 
-        writeln!(f, "{}", section_name(segment))?;
+        writeln!(f, "    {}", section_name(segment))?;
         writeln!(f)?;
 
         for (idx, symbol) in symbols.iter().enumerate() {
