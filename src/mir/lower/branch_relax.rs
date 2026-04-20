@@ -49,7 +49,7 @@ impl<T: LoweringTarget> Lowerer<T> {
                     };
 
                     let branch_offset =
-                        block_offsets[&target_block_id] as isize - current_offset as isize;
+                        block_offsets[target_block_id] as isize - current_offset as isize;
                     if !range.contains(&branch_offset) {
                         rewrite = Some((block_index, inst_index, *target_block_id));
                         break 'outer;

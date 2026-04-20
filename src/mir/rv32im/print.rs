@@ -154,14 +154,7 @@ impl<'a> Display for RV32InstPrinter<'a> {
             Sbs { rs, symbol, rt } | Shs { rs, symbol, rt } | Sws { rs, symbol, rt } => {
                 let symbol_name = &self.symbol_names[symbol];
                 let inst_name = &self.inst.variant_name()[..2];
-                write!(
-                    f,
-                    "{} {}, {}, {}",
-                    inst_name,
-                    rs,
-                    symbol_name,
-                    rt
-                )
+                write!(f, "{} {}, {}, {}", inst_name, rs, symbol_name, rt)
             }
             Call { func, .. } | Tail { func, .. } => {
                 let symbol_name = &self.symbol_names[func];
@@ -205,7 +198,10 @@ mod tests {
         };
         let block_names = HashMap::new();
         let symbol_names = HashMap::new();
-        assert_eq!(printer(&inst, &block_names, &symbol_names).to_string(), "add t0, s1, a0");
+        assert_eq!(
+            printer(&inst, &block_names, &symbol_names).to_string(),
+            "add t0, s1, a0"
+        );
     }
 
     #[test]

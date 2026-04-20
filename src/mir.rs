@@ -8,7 +8,8 @@ pub(crate) use macros::*;
 use std::{
     collections::{HashMap, HashSet},
     fmt::{Debug, Display},
-    hash::Hash, ops::RangeInclusive,
+    hash::Hash,
+    ops::RangeInclusive,
 };
 
 use crate::mir::print::InstPrinter;
@@ -51,7 +52,9 @@ pub trait TargetInst {
 
     fn def_regs(&self) -> Vec<Register<Self::PhysicalReg>>;
     fn use_regs(&self) -> Vec<Register<Self::PhysicalReg>>;
-    fn def_conflict_regs(&self) -> HashMap<Register<Self::PhysicalReg>, Vec<Register<Self::PhysicalReg>>>;
+    fn def_conflict_regs(
+        &self,
+    ) -> HashMap<Register<Self::PhysicalReg>, Vec<Register<Self::PhysicalReg>>>;
 
     fn is_terminator(&self) -> bool;
     fn is_ret(&self) -> bool;
@@ -77,7 +80,7 @@ pub trait TargetInst {
 
     fn size_in_bytes(&self) -> usize;
 
-    fn get_branch_target(&mut self) -> Option<& mut BlockId>;
+    fn get_branch_target(&mut self) -> Option<&mut BlockId>;
 }
 
 pub trait LoweringTarget: TargetArch + Default {
@@ -253,14 +256,8 @@ pub trait LoweringTarget: TargetArch + Default {
         offset: i32,
         rt: Register<Self::PhysicalReg>,
     ) -> Self::MachineInst;
-    fn emit_load_incoming_arg(
-        rd: Register<Self::PhysicalReg>,
-        offset: i32,
-    ) -> Self::MachineInst;
-    fn emit_get_stack_addr(
-        rd: Register<Self::PhysicalReg>,
-        slot: StackSlotId,
-    )
+    fn emit_load_incoming_arg(rd: Register<Self::PhysicalReg>, offset: i32) -> Self::MachineInst;
+    fn emit_get_stack_addr(rd: Register<Self::PhysicalReg>, slot: StackSlotId)
     -> Self::MachineInst;
 
     fn emit_load_stack_slot(
@@ -331,7 +328,7 @@ pub struct FrameLayout<T: TargetArch> {
 pub struct VRegCounter(usize);
 
 impl VRegCounter {
-    pub fn next(&mut self) -> VRegId {
+    pub fn next_vreg(&mut self) -> VRegId {
         let id = self.0;
         self.0 += 1;
         VRegId(id)
@@ -367,7 +364,7 @@ impl<T: TargetArch> MachineFunction<T> {
     }
 
     pub fn new_vreg(&mut self) -> VRegId {
-        self.vreg_counter.next()
+        self.vreg_counter.next_vreg()
     }
 
     pub fn record_outgoing_arg(&mut self, size: usize) {
@@ -389,7 +386,7 @@ pub enum Linkage {
 }
 
 pub enum MachineSymbolKind<T: TargetArch> {
-    Function(MachineFunction<T>),
+    Function(Box<MachineFunction<T>>),
     ExternalPlaceholder,
     Data(Vec<u8>),
     Bss { size: usize },
@@ -569,9 +566,8 @@ impl<T: TargetArch> LivenessInfo<T> {
     }
 }
 
-struct ControlFlowGraph {
+pub(crate) struct ControlFlowGraph {
     pub succs: HashMap<BlockId, HashSet<BlockId>>,
-    pub preds: HashMap<BlockId, HashSet<BlockId>>,
 }
 
 impl<T: TargetArch> Display for MachineModule<T> {

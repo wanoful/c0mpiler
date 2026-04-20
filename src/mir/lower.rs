@@ -1,8 +1,8 @@
+pub(crate) mod branch_relax;
 pub(crate) mod layout;
 pub(crate) mod logue;
 pub(crate) mod phi;
 pub(crate) mod regalloc;
-pub(crate) mod branch_relax;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -134,13 +134,18 @@ fn lower_operand<R: LoweringTarget>(
     }
 }
 
+struct CopyMove<R: TargetArch> {
+    dst: Register<R::PhysicalReg>,
+    src: Register<R::PhysicalReg>,
+}
+
 fn resolve_parallel_copy<R: TargetArch>(
-    moves: Vec<(Register<R::PhysicalReg>, Register<R::PhysicalReg>)>,
+    moves: Vec<CopyMove<R>>,
     machine_function: &mut MachineFunction<R>,
 ) -> Vec<R::MachineInst> {
     let mut edges: HashMap<Register<R::PhysicalReg>, Vec<Register<R::PhysicalReg>>> =
         HashMap::new();
-    for (dst, src) in moves {
+    for CopyMove { dst, src } in moves {
         if dst != src {
             edges.entry(src).or_default().push(dst);
         }
@@ -149,18 +154,18 @@ fn resolve_parallel_copy<R: TargetArch>(
     let mut visited = HashSet::new();
     let mut visiting = HashSet::new();
 
-    let mut middle_insts: Vec<R::MachineInst> = Vec::new();
-    let mut first_insts: Vec<R::MachineInst> = Vec::new();
-    let mut last_insts: Vec<R::MachineInst> = Vec::new();
+    struct Insts<R: TargetArch> {
+        middle: Vec<R::MachineInst>,
+        first: Vec<R::MachineInst>,
+        last: Vec<R::MachineInst>,
+    }
 
     fn visit_fn<R: TargetArch>(
         node: Register<R::PhysicalReg>,
         visited: &mut HashSet<Register<R::PhysicalReg>>,
         visiting: &mut HashSet<Register<R::PhysicalReg>>,
         edges: &HashMap<Register<R::PhysicalReg>, Vec<Register<R::PhysicalReg>>>,
-        middle_insts: &mut Vec<R::MachineInst>,
-        first_insts: &mut Vec<R::MachineInst>,
-        last_insts: &mut Vec<R::MachineInst>,
+        insts: &mut Insts<R>,
         machine_function: &mut MachineFunction<R>,
     ) {
         if visited.contains(&node) {
@@ -171,22 +176,13 @@ fn resolve_parallel_copy<R: TargetArch>(
 
         if let Some(neighbors) = edges.get(&node) {
             for &neighbor in neighbors {
-                visit_fn(
-                    neighbor,
-                    visited,
-                    visiting,
-                    edges,
-                    middle_insts,
-                    first_insts,
-                    last_insts,
-                    machine_function,
-                );
+                visit_fn(neighbor, visited, visiting, edges, insts, machine_function);
                 if visiting.contains(&neighbor) {
                     let temp = Register::Virtual(machine_function.new_vreg());
-                    first_insts.push(R::MachineInst::mv(temp, node));
-                    last_insts.push(R::MachineInst::mv(neighbor, temp));
+                    insts.first.push(R::MachineInst::mv(temp, node));
+                    insts.last.push(R::MachineInst::mv(neighbor, temp));
                 } else {
-                    middle_insts.push(R::MachineInst::mv(neighbor, node));
+                    insts.middle.push(R::MachineInst::mv(neighbor, node));
                 }
             }
         }
@@ -195,23 +191,26 @@ fn resolve_parallel_copy<R: TargetArch>(
     }
 
     let nodes: Vec<_> = edges.keys().copied().collect();
+    let mut insts = Insts {
+        middle: Vec::new(),
+        first: Vec::new(),
+        last: Vec::new(),
+    };
     for node in nodes {
         visit_fn(
             node,
             &mut visited,
             &mut visiting,
             &edges,
-            &mut middle_insts,
-            &mut first_insts,
-            &mut last_insts,
+            &mut insts,
             machine_function,
         );
     }
 
     let mut out = Vec::new();
-    out.extend(first_insts);
-    out.extend(middle_insts);
-    out.extend(last_insts);
+    out.extend(insts.first);
+    out.extend(insts.middle);
+    out.extend(insts.last);
     out
 }
 
@@ -225,7 +224,10 @@ fn parallel_copy<R: LoweringTarget>(
     let mut moves = Vec::with_capacity(phis.len());
     for (dst, value) in phis {
         let src = lower_operand(&value, out, state, machine_function, machine_module)?;
-        moves.push((Register::Virtual(dst), src));
+        moves.push(CopyMove {
+            dst: Register::Virtual(dst),
+            src,
+        });
     }
     out.extend(resolve_parallel_copy(moves, machine_function));
     Ok(())
@@ -535,57 +537,10 @@ impl<T: LoweringTarget> Lowerer<T> {
     ) -> Result<MachineSymbolKind<T>, LowerError> {
         let initializer = global.as_global_variable().initializer.clone();
 
-        Ok(MachineSymbolKind::Data(
-            self.lower_constant(module, &initializer)?,
-        ))
-    }
-
-    fn lower_constant(
-        &self,
-        module: &LLVMModule,
-        constant: &ConstantPtr,
-    ) -> Result<Vec<u8>, LowerError> {
-        let ty = constant.get_type();
-        let type_layout = module.get_type_layout(ty).unwrap();
-
-        match constant.as_constant() {
-            Constant::ConstantInt(ConstantInt(number)) => {
-                let bytes = number.to_le_bytes();
-                Ok(bytes[..(type_layout.layout.size as usize)].to_vec())
-            }
-            Constant::ConstantArray(ConstantArray(inners)) => {
-                let array_layout = type_layout.shape.as_array().unwrap();
-                inners.iter().try_fold(vec![], |mut acc, inner| {
-                    let mut inner_bytes = self.lower_constant(module, inner)?;
-                    assert!(inner_bytes.len() <= array_layout.stride as usize);
-                    inner_bytes.resize(array_layout.stride as usize, 0);
-                    acc.append(&mut inner_bytes);
-                    Ok(acc)
-                })
-            }
-            Constant::ConstantStruct(ConstantStruct(fields)) => {
-                let struct_layout = type_layout.shape.as_struct().unwrap();
-                fields.iter().zip(struct_layout.fields.iter()).try_fold(
-                    vec![],
-                    |mut acc, (field, field_layout)| {
-                        assert!(field_layout.offset as usize >= acc.len());
-                        acc.resize(field_layout.offset as usize, 0);
-                        let mut field_bytes = self.lower_constant(module, field)?;
-                        acc.append(&mut field_bytes);
-                        Ok(acc)
-                    },
-                )
-            }
-            Constant::ConstantString(ConstantString(string)) => {
-                let mut bytes = string.as_bytes().to_vec();
-                assert!(bytes.len() <= type_layout.layout.size as usize, "String constant is {} bytes, but type layout size is {}", bytes.len(), type_layout.layout.size);
-                bytes.resize(type_layout.layout.size as usize, 0);
-                Ok(bytes)
-            }
-            Constant::ConstantNull(..) => Err(LowerError::UnimplementedGlobal(
-                "Lowering null constant is not implemented yet".to_string(),
-            )),
-        }
+        Ok(MachineSymbolKind::Data(lower_constant(
+            module,
+            &initializer,
+        )?))
     }
 
     fn lower_function(
@@ -593,7 +548,7 @@ impl<T: LoweringTarget> Lowerer<T> {
         function: &FunctionPtr,
         module: &LLVMModule,
         machine_module: &mut MachineModule<T>,
-    ) -> Result<MachineFunction<T>, LowerError> {
+    ) -> Result<Box<MachineFunction<T>>, LowerError> {
         let function_name = function.get_name().unwrap();
         let blocks = function.as_function().blocks.borrow().clone();
         let entry = blocks
@@ -710,8 +665,13 @@ impl<T: LoweringTarget> Lowerer<T> {
             Binary(binary_opcode) => {
                 use crate::ir::ir_value::BinaryOpcode::*;
 
-                let rs1 =
-                    lower_operand(&operands[0], &mut out, state, machine_function, machine_module)?;
+                let rs1 = lower_operand(
+                    &operands[0],
+                    &mut out,
+                    state,
+                    machine_function,
+                    machine_module,
+                )?;
 
                 if let crate::ir::ir_value::ValueKind::Constant(Constant::ConstantInt(number)) =
                     &operands[1].kind
@@ -745,8 +705,13 @@ impl<T: LoweringTarget> Lowerer<T> {
                     }
                 }
 
-                let rs2 =
-                    lower_operand(&operands[1], &mut out, state, machine_function, machine_module)?;
+                let rs2 = lower_operand(
+                    &operands[1],
+                    &mut out,
+                    state,
+                    machine_function,
+                    machine_module,
+                )?;
                 let rd_vreg = machine_function.new_vreg();
                 let rd = Register::Virtual(rd_vreg);
 
@@ -855,8 +820,13 @@ impl<T: LoweringTarget> Lowerer<T> {
                 };
 
                 if *has_cond {
-                    let cond =
-                        lower_operand(&operands[0], &mut out, state, machine_function, machine_module)?;
+                    let cond = lower_operand(
+                        &operands[0],
+                        &mut out,
+                        state,
+                        machine_function,
+                        machine_module,
+                    )?;
                     let mut true_block_id = state
                         .block_id(&BasicBlockPtr(operands[1].clone()))
                         .ok_or_else(|| LowerError::UnknownBlock {
@@ -949,8 +919,13 @@ impl<T: LoweringTarget> Lowerer<T> {
                 }
             }
             GetElementPtr { base_ty } => {
-                let mut base =
-                    lower_operand(&operands[0], &mut out, state, machine_function, machine_module)?;
+                let mut base = lower_operand(
+                    &operands[0],
+                    &mut out,
+                    state,
+                    machine_function,
+                    machine_module,
+                )?;
                 let base_index = &operands[1];
                 let indices = &operands[2..];
 
@@ -1092,15 +1067,25 @@ impl<T: LoweringTarget> Lowerer<T> {
             }
             Ret { is_void } => {
                 if !*is_void {
-                    let rs =
-                        lower_operand(&operands[0], &mut out, state, machine_function, machine_module)?;
+                    let rs = lower_operand(
+                        &operands[0],
+                        &mut out,
+                        state,
+                        machine_function,
+                        machine_module,
+                    )?;
                     out.push(T::MachineInst::mv(Register::Physical(T::return_reg()), rs));
                 }
                 out.push(T::emit_ret());
             }
             Store => {
-                let rs2 =
-                    lower_operand(&operands[0], &mut out, state, machine_function, machine_module)?;
+                let rs2 = lower_operand(
+                    &operands[0],
+                    &mut out,
+                    state,
+                    machine_function,
+                    machine_module,
+                )?;
                 let addr = &operands[1];
                 let type_layout = module.get_type_layout(operands[0].get_type()).unwrap();
                 if addr.kind.is_global_object() {
@@ -1118,7 +1103,8 @@ impl<T: LoweringTarget> Lowerer<T> {
                         _ => panic!("unsupported store size"),
                     }
                 } else {
-                    let rs1 = lower_operand(addr, &mut out, state, machine_function, machine_module)?;
+                    let rs1 =
+                        lower_operand(addr, &mut out, state, machine_function, machine_module)?;
                     match type_layout.layout.size as usize {
                         1 | 2 | 4 => {
                             out.push(T::emit_store_mem(
@@ -1133,10 +1119,20 @@ impl<T: LoweringTarget> Lowerer<T> {
                 }
             }
             Icmp(icmp_code) => {
-                let rs1 =
-                    lower_operand(&operands[0], &mut out, state, machine_function, machine_module)?;
-                let rs2 =
-                    lower_operand(&operands[1], &mut out, state, machine_function, machine_module)?;
+                let rs1 = lower_operand(
+                    &operands[0],
+                    &mut out,
+                    state,
+                    machine_function,
+                    machine_module,
+                )?;
+                let rs2 = lower_operand(
+                    &operands[1],
+                    &mut out,
+                    state,
+                    machine_function,
+                    machine_module,
+                )?;
                 let rd_vreg = machine_function.new_vreg();
                 let rd = Register::Virtual(rd_vreg);
                 emit_icmp(icmp_code, rd, rs1, rs2, &mut out, machine_function);
@@ -1149,12 +1145,27 @@ impl<T: LoweringTarget> Lowerer<T> {
                 );
             }
             Select => {
-                let cond =
-                    lower_operand(&operands[0], &mut out, state, machine_function, machine_module)?;
-                let true_val =
-                    lower_operand(&operands[1], &mut out, state, machine_function, machine_module)?;
-                let false_val =
-                    lower_operand(&operands[2], &mut out, state, machine_function, machine_module)?;
+                let cond = lower_operand(
+                    &operands[0],
+                    &mut out,
+                    state,
+                    machine_function,
+                    machine_module,
+                )?;
+                let true_val = lower_operand(
+                    &operands[1],
+                    &mut out,
+                    state,
+                    machine_function,
+                    machine_module,
+                )?;
+                let false_val = lower_operand(
+                    &operands[2],
+                    &mut out,
+                    state,
+                    machine_function,
+                    machine_module,
+                )?;
 
                 let mask1 = machine_function.new_vreg();
                 let mask2 = machine_function.new_vreg();
@@ -1190,16 +1201,26 @@ impl<T: LoweringTarget> Lowerer<T> {
                 state.record_vreg(instruction, rd_vreg);
             }
             PtrToInt => {
-                let src =
-                    lower_operand(&operands[0], &mut out, state, machine_function, machine_module)?;
+                let src = lower_operand(
+                    &operands[0],
+                    &mut out,
+                    state,
+                    machine_function,
+                    machine_module,
+                )?;
                 let rd_vreg = machine_function.new_vreg();
                 out.push(T::MachineInst::mv(Register::Virtual(rd_vreg), src));
                 state.record_vreg(instruction, rd_vreg);
             }
             Trunc => {
                 let dst_ty = instruction.get_type();
-                let src =
-                    lower_operand(&operands[0], &mut out, state, machine_function, machine_module)?;
+                let src = lower_operand(
+                    &operands[0],
+                    &mut out,
+                    state,
+                    machine_function,
+                    machine_module,
+                )?;
                 let dst_bits = dst_ty.as_int().unwrap().0;
                 let masked = emit_masked_value(src, dst_bits, &mut out, machine_function);
                 let rd_vreg = match masked {
@@ -1209,8 +1230,13 @@ impl<T: LoweringTarget> Lowerer<T> {
                 state.record_vreg(instruction, rd_vreg);
             }
             Zext => {
-                let src =
-                    lower_operand(&operands[0], &mut out, state, machine_function, machine_module)?;
+                let src = lower_operand(
+                    &operands[0],
+                    &mut out,
+                    state,
+                    machine_function,
+                    machine_module,
+                )?;
                 let src_bits = operands[0].get_type().as_int().unwrap().0;
                 let extended = emit_masked_value(src, src_bits, &mut out, machine_function);
                 let rd_vreg = match extended {
@@ -1220,8 +1246,13 @@ impl<T: LoweringTarget> Lowerer<T> {
                 state.record_vreg(instruction, rd_vreg);
             }
             Sext => {
-                let src =
-                    lower_operand(&operands[0], &mut out, state, machine_function, machine_module)?;
+                let src = lower_operand(
+                    &operands[0],
+                    &mut out,
+                    state,
+                    machine_function,
+                    machine_module,
+                )?;
                 let rd_vreg = machine_function.new_vreg();
                 let src_bits = operands[0].get_type().as_int().unwrap().0;
                 if src_bits >= 32 {
@@ -1312,11 +1343,9 @@ impl<T: LoweringTarget> Lowerer<T> {
     }
 
     pub(crate) fn compute_cfg(&self, machine_function: &MachineFunction<T>) -> ControlFlowGraph {
-        let mut preds: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
         let mut succs: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
 
         for block in machine_function.blocks.iter() {
-            preds.entry(block.id).or_default();
             succs.entry(block.id).or_default();
         }
 
@@ -1326,13 +1355,12 @@ impl<T: LoweringTarget> Lowerer<T> {
                     break;
                 }
                 inst.get_successors().into_iter().for_each(|succ| {
-                    preds.entry(succ).or_default().insert(block.id);
                     succs.entry(block.id).or_default().insert(succ);
                 });
             }
         }
 
-        ControlFlowGraph { succs, preds }
+        ControlFlowGraph { succs }
     }
 
     fn expand_pseudo_instructions(&self, machine_function: &mut MachineFunction<T>) {
@@ -1346,8 +1374,57 @@ impl<T: LoweringTarget> Lowerer<T> {
     }
 }
 
-fn empty_machine_function<T: TargetArch>(name: String) -> MachineFunction<T> {
-    MachineFunction {
+fn lower_constant(module: &LLVMModule, constant: &ConstantPtr) -> Result<Vec<u8>, LowerError> {
+    let ty = constant.get_type();
+    let type_layout = module.get_type_layout(ty).unwrap();
+
+    match constant.as_constant() {
+        Constant::ConstantInt(ConstantInt(number)) => {
+            let bytes = number.to_le_bytes();
+            Ok(bytes[..(type_layout.layout.size as usize)].to_vec())
+        }
+        Constant::ConstantArray(ConstantArray(inners)) => {
+            let array_layout = type_layout.shape.as_array().unwrap();
+            inners.iter().try_fold(vec![], |mut acc, inner| {
+                let mut inner_bytes = lower_constant(module, inner)?;
+                assert!(inner_bytes.len() <= array_layout.stride as usize);
+                inner_bytes.resize(array_layout.stride as usize, 0);
+                acc.append(&mut inner_bytes);
+                Ok(acc)
+            })
+        }
+        Constant::ConstantStruct(ConstantStruct(fields)) => {
+            let struct_layout = type_layout.shape.as_struct().unwrap();
+            fields.iter().zip(struct_layout.fields.iter()).try_fold(
+                vec![],
+                |mut acc, (field, field_layout)| {
+                    assert!(field_layout.offset as usize >= acc.len());
+                    acc.resize(field_layout.offset as usize, 0);
+                    let mut field_bytes = lower_constant(module, field)?;
+                    acc.append(&mut field_bytes);
+                    Ok(acc)
+                },
+            )
+        }
+        Constant::ConstantString(ConstantString(string)) => {
+            let mut bytes = string.as_bytes().to_vec();
+            assert!(
+                bytes.len() <= type_layout.layout.size as usize,
+                "String constant is {} bytes, but type layout size is {}",
+                bytes.len(),
+                type_layout.layout.size
+            );
+            bytes.resize(type_layout.layout.size as usize, 0);
+            Ok(bytes)
+        }
+        Constant::ConstantNull(..) => Err(LowerError::UnimplementedGlobal(
+            "Lowering null constant is not implemented yet".to_string(),
+        )),
+    }
+}
+
+fn empty_machine_function<T: TargetArch>(name: String) -> Box<MachineFunction<T>> {
+    Box::new(MachineFunction {
         name,
         blocks: Vec::new(),
         vreg_counter: VRegCounter(0),
@@ -1367,12 +1444,13 @@ fn empty_machine_function<T: TargetArch>(name: String) -> MachineFunction<T> {
             callee_saved_slots: HashMap::new(),
             ra_slot: None,
         },
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::{empty_machine_function, resolve_parallel_copy};
+    use crate::mir::lower::CopyMove;
     use crate::mir::rv32im::{RV32Arch, RV32Inst};
     use crate::mir::{Register, VRegId};
     use std::collections::HashMap;
@@ -1404,8 +1482,14 @@ mod tests {
 
         let insts = resolve_parallel_copy::<RV32Arch>(
             vec![
-                (Register::Virtual(VRegId(0)), Register::Virtual(VRegId(1))),
-                (Register::Virtual(VRegId(1)), Register::Virtual(VRegId(2))),
+                CopyMove {
+                    dst: Register::Virtual(VRegId(0)),
+                    src: Register::Virtual(VRegId(1)),
+                },
+                CopyMove {
+                    dst: Register::Virtual(VRegId(1)),
+                    src: Register::Virtual(VRegId(2)),
+                },
             ],
             &mut machine_function,
         );
@@ -1424,8 +1508,14 @@ mod tests {
 
         let insts = resolve_parallel_copy::<RV32Arch>(
             vec![
-                (Register::Virtual(VRegId(0)), Register::Virtual(VRegId(1))),
-                (Register::Virtual(VRegId(1)), Register::Virtual(VRegId(0))),
+                CopyMove {
+                    dst: Register::Virtual(VRegId(0)),
+                    src: Register::Virtual(VRegId(1)),
+                },
+                CopyMove {
+                    dst: Register::Virtual(VRegId(1)),
+                    src: Register::Virtual(VRegId(0)),
+                },
             ],
             &mut machine_function,
         );
@@ -1444,8 +1534,14 @@ mod tests {
 
         let insts = resolve_parallel_copy::<RV32Arch>(
             vec![
-                (Register::Virtual(VRegId(0)), Register::Virtual(VRegId(2))),
-                (Register::Virtual(VRegId(1)), Register::Virtual(VRegId(2))),
+                CopyMove {
+                    dst: Register::Virtual(VRegId(0)),
+                    src: Register::Virtual(VRegId(2)),
+                },
+                CopyMove {
+                    dst: Register::Virtual(VRegId(1)),
+                    src: Register::Virtual(VRegId(2)),
+                },
             ],
             &mut machine_function,
         );

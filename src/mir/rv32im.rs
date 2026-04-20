@@ -22,8 +22,8 @@ impl TargetArch for RV32Arch {
         use RV32Reg::*;
         // 删除 T5, T6 以供溢出使用
         vec![
-            T0, T1, T2, T3, T4, T5, S0, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, A0, A1, A2, A3,
-            A4, A5, A6, A7,
+            T0, T1, T2, T3, T4, T5, S0, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, A0, A1, A2,
+            A3, A4, A5, A6, A7,
         ]
     }
 
@@ -322,7 +322,7 @@ impl TargetInst for RV32Inst {
                 RV32Reg::A6,
                 RV32Reg::A7,
             ][..(*num_args).min(8)]
-                .into_iter()
+                .iter()
                 .map(|r| Register::Physical(*r))
                 .collect(),
             _ => vec![],
@@ -331,19 +331,19 @@ impl TargetInst for RV32Inst {
 
     fn is_terminator(&self) -> bool {
         use RV32Inst::*;
-        match self {
+        matches!(
+            self,
             Beq { .. }
-            | Bne { .. }
-            | Blt { .. }
-            | Bge { .. }
-            | Bltu { .. }
-            | Bgeu { .. }
-            | Jal { .. }
-            | Jalr { .. }
-            | Ret { .. }
-            | Tail { .. } => true,
-            _ => false,
-        }
+                | Bne { .. }
+                | Blt { .. }
+                | Bge { .. }
+                | Bltu { .. }
+                | Bgeu { .. }
+                | Jal { .. }
+                | Jalr { .. }
+                | Ret
+                | Tail { .. }
+        )
     }
 
     fn is_ret(&self) -> bool {
@@ -392,10 +392,7 @@ impl TargetInst for RV32Inst {
     }
 
     fn is_call(&self) -> bool {
-        match self {
-            RV32Inst::Call { .. } => true,
-            _ => false,
-        }
+        matches!(self, RV32Inst::Call { .. })
     }
 
     fn size_in_bytes(&self) -> usize {
@@ -656,7 +653,7 @@ impl LoweringTarget for RV32Arch {
     fn emit_adjust_sp(offset: isize) -> Vec<Self::MachineInst> {
         if offset == 0 {
             vec![]
-        } else if -2048 <= offset && offset <= 2047 {
+        } else if (-2048..=2047).contains(&offset) {
             vec![RV32Inst::Addi {
                 rd: Register::Physical(RV32Reg::Sp),
                 rs1: Register::Physical(RV32Reg::Sp),
@@ -687,7 +684,7 @@ impl LoweringTarget for RV32Arch {
         match inst {
             LoadStack { rd, slot } => {
                 let offset = frame_layout.slot_offsets[slot];
-                if -2048 <= offset && offset <= 2047 {
+                if (-2048..=2047).contains(&offset) {
                     vec![RV32Inst::Lw {
                         rd: *rd,
                         rs1: Register::Physical(RV32Reg::Sp),
@@ -714,7 +711,7 @@ impl LoweringTarget for RV32Arch {
             }
             SaveStack { rs, slot, rt } => {
                 let offset = frame_layout.slot_offsets[slot];
-                if -2048 <= offset && offset <= 2047 {
+                if (-2048..=2047).contains(&offset) {
                     vec![RV32Inst::Sw {
                         rs1: Register::Physical(RV32Reg::Sp),
                         rs2: *rs,
@@ -740,8 +737,8 @@ impl LoweringTarget for RV32Arch {
                 }
             }
             StoreOutgoingArg { rs, offset, rt } => {
-                let offset = frame_layout.outgoing_arg_offset as i32 + *offset as i32;
-                if -2048 <= offset && offset <= 2047 {
+                let offset = frame_layout.outgoing_arg_offset as i32 + *offset;
+                if (-2048..=2047).contains(&offset) {
                     vec![RV32Inst::Sw {
                         rs1: Register::Physical(RV32Reg::Sp),
                         rs2: *rs,
@@ -767,8 +764,8 @@ impl LoweringTarget for RV32Arch {
                 }
             }
             LoadIncomingArg { rd, offset } => {
-                let offset = frame_layout.incoming_arg_offset as i32 + *offset as i32;
-                if -2048 <= offset && offset <= 2047 {
+                let offset = frame_layout.incoming_arg_offset as i32 + *offset;
+                if (-2048..=2047).contains(&offset) {
                     vec![RV32Inst::Lw {
                         rd: *rd,
                         rs1: Register::Physical(RV32Reg::Sp),
@@ -795,7 +792,7 @@ impl LoweringTarget for RV32Arch {
             }
             GetStackAddr { rd, slot } => {
                 let offset = frame_layout.slot_offsets[slot] as i32;
-                if -2048 <= offset && offset <= 2047 {
+                if (-2048..=2047).contains(&offset) {
                     vec![RV32Inst::Addi {
                         rd: *rd,
                         rs1: Register::Physical(RV32Reg::Sp),

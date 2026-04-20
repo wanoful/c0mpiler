@@ -56,13 +56,7 @@ impl<T: LoweringTarget> InterferenceGraph<T> {
         }
     }
 
-    fn degree(&self, vreg_id: VRegId) -> usize {
-        self.edges
-            .get(&vreg_id)
-            .map_or(0, |neighbors| neighbors.len())
-    }
-
-    fn avaliable_regs(&self, vreg_id: VRegId) -> Vec<T::PhysicalReg> {
+    fn available_regs(&self, vreg_id: VRegId) -> Vec<T::PhysicalReg> {
         let all_regs = T::get_allocatable_regs();
         if let Some(forbidden) = self.forbidden_phys.get(&vreg_id) {
             all_regs
@@ -79,7 +73,7 @@ impl<T: LoweringTarget> InterferenceGraph<T> {
         let mut degrees: HashMap<VRegId, (usize, usize)> = self
             .edges
             .iter()
-            .map(|(id, neighbor)| (*id, (neighbor.len(), self.avaliable_regs(*id).len())))
+            .map(|(id, neighbor)| (*id, (neighbor.len(), self.available_regs(*id).len())))
             .collect();
 
         while !degrees.is_empty() {
@@ -95,7 +89,9 @@ impl<T: LoweringTarget> InterferenceGraph<T> {
             degrees.remove(&node);
             stack.push(node);
             self.edges[&node].iter().for_each(|neighbor| {
-                degrees.get_mut(neighbor).map(|(degree, _)| *degree -= 1);
+                if let Some((degree, _)) = degrees.get_mut(neighbor) {
+                    *degree -= 1;
+                }
             });
         }
 
@@ -118,7 +114,7 @@ impl<T: LoweringTarget> Lowerer<T> {
 
         for vreg_id in stack.into_iter().rev() {
             let mut available_regs: HashSet<T::PhysicalReg> =
-                HashSet::from_iter(graph.avaliable_regs(vreg_id));
+                HashSet::from_iter(graph.available_regs(vreg_id));
             if let Some(forbidden_regs) = graph.forbidden_phys.get(&vreg_id) {
                 available_regs = available_regs.difference(forbidden_regs).cloned().collect();
             }
@@ -165,11 +161,11 @@ impl<T: LoweringTarget> Lowerer<T> {
             for inst in block.instructions.iter() {
                 need_save_ra |= inst.is_call();
                 for r in inst.def_regs().iter() {
-                    if let Register::Physical(phy) = r {
-                        if T::is_callee_saved(*phy) {
-                            used_callee_saved.insert(*phy);
-                        }
-                    }   
+                    if let Register::Physical(phy) = r
+                        && T::is_callee_saved(*phy)
+                    {
+                        used_callee_saved.insert(*phy);
+                    }
                 }
             }
         }

@@ -44,10 +44,6 @@ impl<T: PartialEq + Eq + Hash> Renamer<T> {
             name
         }
     }
-
-    pub fn get_name(&self, symbol: T) -> Option<&String> {
-        self.symbol_names.get(&symbol)
-    }
 }
 
 pub struct ModulePrinter<'a, T: TargetArch> {
@@ -136,7 +132,7 @@ impl<T: TargetArch> ModulePrinter<'_, T> {
             MachineSymbolKind::ExternalPlaceholder => {}
             MachineSymbolKind::Data(bytes) => {
                 self.print_symbol_header(f, symbol)?;
-                self.print_data_object(f, &bytes)?;
+                self.print_data_object(f, bytes)?;
             }
             MachineSymbolKind::Bss { size } => {
                 self.print_symbol_header(f, symbol)?;
