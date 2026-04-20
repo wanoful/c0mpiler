@@ -284,7 +284,11 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                     kind: crate::irgen::value::CoreContainerKind::Ptr(ty),
                 }
             }
-            Fn { .. } => {
+            Fn {
+                is_placeholder,
+                ast_node,
+                ..
+            } => {
                 let mut fn_resolved_ty = self.analyzer.probe_type(value.ty).unwrap();
 
                 if is_main_function {
@@ -325,10 +329,17 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                 }
 
                 let fn_ty = self.context.function_type(ret_ty.clone(), arg_tys);
-                let func = self
-                    .core_module
-                    .borrow_mut()
-                    .define_function_value(full_name.to_string(), fn_ty.clone());
+                let is_declare = *is_placeholder
+                    || matches!(ast_node, crate::semantics::value::FnAstRefInfo::None);
+                let func = if is_declare {
+                    self.core_module
+                        .borrow_mut()
+                        .declare_function_value(full_name.to_string(), fn_ty.clone())
+                } else {
+                    self.core_module
+                        .borrow_mut()
+                        .define_function_value(full_name.to_string(), fn_ty.clone())
+                };
                 {
                     let mut module = self.core_module.borrow_mut();
                     module.append_signature_args(func);

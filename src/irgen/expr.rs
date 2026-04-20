@@ -16,7 +16,8 @@ use crate::{
         IRGenerator,
         extra::ExprExtra,
         value::{
-            ContainerKind, CoreContainerKind, CoreValueContainer, ValueKind, ValuePtrContainer,
+            ContainerKind, CoreContainerKind, CoreValueContainer, CoreValueKind, ValueKind,
+            ValuePtrContainer,
         },
     },
     semantics::{analyzer::SemanticAnalyzer, visitor::Visitor},
@@ -420,6 +421,16 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
             ValueKind::LenMethod(len) => ValuePtrContainer {
                 value_ptr: self.context.get_i32(len).into(),
                 kind: ContainerKind::Raw { fat: None },
+            },
+        }
+    }
+
+    pub(crate) fn special_method_call_core(&mut self, kind: CoreValueKind) -> CoreValueContainer {
+        match kind {
+            CoreValueKind::Normal(..) => impossible!(),
+            CoreValueKind::LenMethod(len) => CoreValueContainer {
+                value: ValueId::Const(self.core_module.borrow_mut().add_i32_const(len)),
+                kind: CoreContainerKind::Raw { fat: None },
             },
         }
     }

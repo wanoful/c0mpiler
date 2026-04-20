@@ -611,9 +611,12 @@ impl CursorBuilder {
         let callee = if let Some(func) = self.module.borrow().get_function(name) {
             func
         } else {
-            self.module
+            let func = self
+                .module
                 .borrow_mut()
-                .declare_function_value(name.to_string(), Self::memcpy_ty().into())
+                .declare_function_value(name.to_string(), Self::memcpy_ty().into());
+            self.module.borrow_mut().append_signature_args(func);
+            func
         };
         let size = self.build_get_size(copy_ty);
         let is_volatile = ValueId::Const(self.module.borrow_mut().add_i1_const(false));

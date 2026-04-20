@@ -371,9 +371,15 @@ impl ModuleCore {
     }
 
     fn ir_print_typed_value(&self, value: ValueId, helper: &mut PrintHelper) {
-        self.value_ty(value).as_ref().ir_print(helper);
-        helper.append(" ");
-        self.ir_print_value(value, helper);
+        if let ValueId::Global(_) = value {
+            "ptr".ir_print(helper);
+            helper.append(" ");
+            self.ir_print_value(value, helper);
+        } else {
+            self.value_ty(value).as_ref().ir_print(helper);
+            helper.append(" ");
+            self.ir_print_value(value, helper);
+        }
     }
 
     fn ir_print_block_ref(&self, block: BlockRef, helper: &mut PrintHelper) {
