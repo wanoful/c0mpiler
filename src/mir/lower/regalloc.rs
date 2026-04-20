@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::mir::{
     LivenessInfo, LoweringTarget, MachineFunction, Register, StackSlotKind, TargetInst, VRegId,
-    lower::{FunctionLoweringState, Lowerer},
+    lower::Lowerer,
 };
 
 struct InterferenceGraph<T: LoweringTarget> {
@@ -179,13 +179,11 @@ impl<T: LoweringTarget> Lowerer<T> {
         let slot =
             machine_function.new_stack_slot(T::WORD_SIZE, T::WORD_SIZE, StackSlotKind::Spill);
 
-        let sratch_regs = T::spill_scratch_regs();
-        debug_assert!(sratch_regs.len() >= 2, "Need at least 2 scratch registers for spilling");
-
-        for block in machine_function.blocks.iter_mut() {
+        for block_index in 0..machine_function.blocks.len() {
+            let old_insts = std::mem::take(&mut machine_function.blocks[block_index].instructions);
             let mut new_insts = Vec::new();
 
-            for inst in block.instructions.iter() {
+            for inst in old_insts.iter() {
                 let uses_spilled = inst.use_regs().iter().any(|r| match r {
                     Register::Virtual(v) => *v == vreg_id,
                     Register::Physical(_) => false,
@@ -199,13 +197,13 @@ impl<T: LoweringTarget> Lowerer<T> {
                 let mut def_map = HashMap::new();
 
                 if uses_spilled {
-                    let temp_in = Register::Physical(sratch_regs[0]);
+                    let temp_in = Register::Virtual(machine_function.new_vreg());
                     new_insts.push(T::emit_load_stack_slot(temp_in, slot));
                     use_map.insert(vreg_id, temp_in);
                 }
 
                 if defs_spilled {
-                    let temp_out = Register::Physical(sratch_regs[1]);
+                    let temp_out = Register::Virtual(machine_function.new_vreg());
                     def_map.insert(vreg_id, temp_out);
                 }
 
@@ -218,7 +216,7 @@ impl<T: LoweringTarget> Lowerer<T> {
                 }
             }
 
-            block.instructions = new_insts;
+            machine_function.blocks[block_index].instructions = new_insts;
         }
     }
 }
