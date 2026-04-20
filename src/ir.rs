@@ -159,6 +159,10 @@ impl LLVMContext {
         self.ctx_impl.borrow().get_named_struct_type(name)
     }
 
+    pub fn named_struct_types(&self) -> HashMap<String, TypePtr> {
+        self.ctx_impl.borrow().named_strcut_ty.clone()
+    }
+
     pub fn get_i1(&self, value: bool) -> ConstantIntPtr {
         self.ctx_impl.borrow_mut().get_i1(value)
     }

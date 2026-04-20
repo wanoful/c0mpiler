@@ -6,11 +6,14 @@ pub mod value;
 pub mod visitor;
 
 use std::collections::HashMap;
+use std::{cell::RefCell, rc::Rc};
 
 use crate::{
     ast::{Crate, NodeId, Symbol},
     impossible,
     ir::{
+        core::{ModuleCore, ValueId},
+        core_builder::CursorBuilder,
         LLVMBuilder, LLVMContext, LLVMModule,
         attribute::Attribute,
         ir_type::TypePtr,
@@ -32,6 +35,9 @@ pub struct IRGenerator<'ast, 'analyzer> {
     pub(crate) builder: LLVMBuilder,
     pub(crate) alloca_builder: LLVMBuilder,
     pub(crate) module: LLVMModule,
+    pub(crate) core_module: Rc<RefCell<ModuleCore>>,
+    pub(crate) core_builder: CursorBuilder,
+    pub(crate) core_alloca_builder: CursorBuilder,
 
     pub(crate) analyzer: &'analyzer SemanticAnalyzer<'ast>,
 
@@ -44,20 +50,29 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         let mut builder = context.create_builder();
         let alloca_builder = context.create_builder();
         let mut module = context.create_module("crate");
+        let core_module = Rc::new(RefCell::new(ModuleCore::new()));
+        core_module.borrow_mut().set_target_data_layout(target);
+        let mut core_builder = CursorBuilder::new(core_module.clone());
+        let core_alloca_builder = CursorBuilder::new(core_module.clone());
         let mut value_indexes = HashMap::default();
 
         add_preludes(&context, &mut builder, &mut module, &mut value_indexes);
+        add_core_preludes(&context, &mut core_builder);
 
         let mut generator = Self {
             context,
             builder,
             alloca_builder,
             module,
+            core_module,
+            core_builder,
+            core_alloca_builder,
             analyzer,
             value_indexes,
         };
 
         generator.add_struct_type();
+        generator.sync_named_structs_to_core();
         generator.absorb_analyzer_global_values(0);
         generator.absorb_analyzer_methods();
 
@@ -70,6 +85,10 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
 
     pub fn print(&self) -> String {
         crate::ir::core::ModuleCore::from_legacy_module(&self.module).print()
+    }
+
+    pub fn core_print(&self) -> String {
+        self.core_module.borrow().print()
     }
 
     pub fn llvm_module(&self) -> &LLVMModule {
@@ -120,6 +139,12 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                 false,
             );
         }
+    }
+
+    fn sync_named_structs_to_core(&mut self) {
+        self.core_module
+            .borrow_mut()
+            .extend_named_structs(self.context.named_struct_types());
     }
 
     fn absorb_analyzer_global_values(&mut self, scope_id: NodeId) {
@@ -471,4 +496,80 @@ fn add_preludes(
     string_plus_fn
         .as_function()
         .add_param_attr(0, Attribute::StructReturn(string_type.clone().into()));
+}
+
+fn add_core_preludes(context: &LLVMContext, builder: &mut CursorBuilder) {
+    let string_type: TypePtr = context.get_named_struct_type("String").unwrap().into();
+    let fat_ptr_type: TypePtr = context.get_named_struct_type("fat_ptr").unwrap().into();
+
+    let str_len_type = context.function_type(
+        context.i32_type().into(),
+        vec![context.ptr_type().into(), context.i32_type().into()],
+    );
+    let str_len_fn = builder
+        .module()
+        .borrow_mut()
+        .create_function_value("str.len".to_string(), str_len_type);
+    let str_len_args = builder.module().borrow_mut().append_signature_args(str_len_fn);
+    let str_len_entry = builder.module().borrow().entry_block(str_len_fn).unwrap();
+    builder.locate_end(str_len_fn, str_len_entry);
+    builder.build_return(Some(ValueId::Arg(str_len_args[1])));
+
+    let string_as_str_type = context.function_type(
+        context.void_type().into(),
+        vec![context.ptr_type().into(), context.ptr_type().into()],
+    );
+    let string_as_str_fn = builder
+        .module()
+        .borrow_mut()
+        .declare_function_value("string_as_str".to_string(), string_as_str_type);
+    {
+        let module_handle = builder.module();
+        let mut module = module_handle.borrow_mut();
+        module.append_signature_args(string_as_str_fn);
+        module.set_sret(string_as_str_fn, fat_ptr_type);
+    }
+
+    let string_len_type =
+        context.function_type(context.i32_type().into(), vec![context.ptr_type().into()]);
+    let string_len_fn = builder
+        .module()
+        .borrow_mut()
+        .declare_function_value("string_len".to_string(), string_len_type);
+    builder.module().borrow_mut().append_signature_args(string_len_fn);
+
+    let i32_to_string_type = context.function_type(
+        context.void_type().into(),
+        vec![context.ptr_type().into(), context.ptr_type().into()],
+    );
+    let to_string_fn = builder
+        .module()
+        .borrow_mut()
+        .declare_function_value("to_string".to_string(), i32_to_string_type);
+    {
+        let module_handle = builder.module();
+        let mut module = module_handle.borrow_mut();
+        module.append_signature_args(to_string_fn);
+        module.set_sret(to_string_fn, string_type.clone());
+    }
+
+    let string_plus_type = context.function_type(
+        context.void_type().into(),
+        vec![
+            context.ptr_type().into(),
+            context.ptr_type().into(),
+            context.ptr_type().into(),
+            context.i32_type().into(),
+        ],
+    );
+    let string_plus_fn = builder
+        .module()
+        .borrow_mut()
+        .declare_function_value("string_plus".to_string(), string_plus_type);
+    {
+        let module_handle = builder.module();
+        let mut module = module_handle.borrow_mut();
+        module.append_signature_args(string_plus_fn);
+        module.set_sret(string_plus_fn, string_type);
+    }
 }

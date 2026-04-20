@@ -7,12 +7,13 @@ use crate::ir::{
     core_inst::{InstKind, OperandSlot, PhiIncoming},
     core_value::{ConstKind, GlobalKind},
     ir_type::{FunctionTypePtr, TypePtr},
+    ir_type::{FunctionType, IntType, PtrType, Type},
     ir_value::{
         Constant, ConstantPtr, ICmpCode as LegacyICmpCode,
         InstructionKind as LegacyInstructionKind, InstructionPtr, Value, ValuePtr,
     },
     ir_value::BinaryOpcode as LegacyBinaryOpcode,
-    layout::TargetDataLayout,
+    layout::{TargetDataLayout, TypeLayoutEngine},
     LLVMModule,
 };
 
@@ -55,6 +56,7 @@ pub struct ModuleCore {
     functions: SlotMap<FunctionId, FunctionData>,
     globals: SlotMap<GlobalId, GlobalData>,
     consts: SlotMap<ConstId, ConstData>,
+    function_globals: HashMap<FunctionId, GlobalId>,
     pub(crate) named_structs: HashMap<String, TypePtr>,
     pub(crate) target_data_layout: Option<TargetDataLayout>,
 }
@@ -125,9 +127,33 @@ impl ModuleCore {
             functions: SlotMap::with_key(),
             globals: SlotMap::with_key(),
             consts: SlotMap::with_key(),
+            function_globals: HashMap::new(),
             named_structs: HashMap::new(),
             target_data_layout: None,
         }
+    }
+
+    pub fn set_target_data_layout(&mut self, target: TargetDataLayout) {
+        self.target_data_layout = Some(target);
+    }
+
+    pub fn target_data_layout(&self) -> Option<TargetDataLayout> {
+        self.target_data_layout
+    }
+
+    pub fn set_named_struct(&mut self, name: String, ty: TypePtr) {
+        self.named_structs.insert(name, ty);
+    }
+
+    pub fn extend_named_structs<I>(&mut self, named_structs: I)
+    where
+        I: IntoIterator<Item = (String, TypePtr)>,
+    {
+        self.named_structs.extend(named_structs);
+    }
+
+    pub fn get_named_struct(&self, name: &str) -> Option<TypePtr> {
+        self.named_structs.get(name).cloned()
     }
 
     pub(crate) fn func(&self, f: FunctionId) -> &FunctionData {
@@ -320,6 +346,18 @@ impl ModuleCore {
         ArgRef { func, arg }
     }
 
+    pub fn append_signature_args(&mut self, func: FunctionId) -> Vec<ArgRef> {
+        assert!(
+            self.func(func).args.is_empty(),
+            "function arguments have already been initialized"
+        );
+        let arg_tys = self.func(func).ty.0.as_function().unwrap().1.clone();
+        arg_tys
+            .into_iter()
+            .map(|ty| self.append_arg(func, ty, None))
+            .collect()
+    }
+
     pub(crate) fn set_sret(&mut self, func: FunctionId, ty: TypePtr) {
         self.func_mut(func).sret = Some(ty);
     }
@@ -330,12 +368,16 @@ impl ModuleCore {
         ty: TypePtr,
         kind: GlobalKind,
     ) -> GlobalId {
-        self.globals.insert(GlobalData {
+        let global = self.globals.insert(GlobalData {
             name,
             ty,
             kind,
             uses: Vec::new(),
-        })
+        });
+        if let GlobalKind::Function(func) = self.globals[global].kind {
+            self.function_globals.insert(func, global);
+        }
+        global
     }
 
     pub(crate) fn add_const(&mut self, ty: TypePtr, kind: ConstKind) -> ConstId {
@@ -344,6 +386,112 @@ impl ModuleCore {
             kind,
             uses: Vec::new(),
         })
+    }
+
+    pub fn add_int_const(&mut self, bits: u8, value: i64) -> ConstId {
+        self.add_const(Rc::new(Type::Int(IntType(bits))), ConstKind::Int(value))
+    }
+
+    pub fn add_i1_const(&mut self, value: bool) -> ConstId {
+        self.add_int_const(1, value as i64)
+    }
+
+    pub fn add_i32_const(&mut self, value: u32) -> ConstId {
+        self.add_int_const(32, i64::from(value))
+    }
+
+    pub fn add_null_const(&mut self) -> ConstId {
+        self.add_const(Rc::new(Type::Ptr(PtrType)), ConstKind::Null)
+    }
+
+    pub fn add_string_const(&mut self, value: impl Into<String>) -> ConstId {
+        let value = value.into();
+        let len = value.len() as u32 + 1;
+        let ty = Rc::new(Type::Array(crate::ir::ir_type::ArrayType(
+            Rc::new(Type::Int(IntType(8))),
+            len,
+        )));
+        self.add_const(ty, ConstKind::String(value))
+    }
+
+    pub fn add_array_const(&mut self, ty: TypePtr, values: Vec<ConstId>) -> ConstId {
+        self.add_const(ty, ConstKind::Array(values))
+    }
+
+    pub fn add_struct_const(&mut self, ty: TypePtr, values: Vec<ConstId>) -> ConstId {
+        self.add_const(ty, ConstKind::Struct(values))
+    }
+
+    pub fn size_of(&self, ty: &TypePtr) -> Option<u32> {
+        let target = self.target_data_layout?;
+        let engine = TypeLayoutEngine::new(target);
+        engine.size_of(ty).ok()
+    }
+
+    pub fn entry_block(&self, func: FunctionId) -> Option<BlockRef> {
+        if self.func(func).is_declare {
+            return None;
+        }
+        Some(BlockRef {
+            func,
+            block: self.func(func).entry,
+        })
+    }
+
+    pub fn get_function(&self, name: &str) -> Option<FunctionId> {
+        self.functions
+            .iter()
+            .find_map(|(id, data)| (data.name == name).then_some(id))
+    }
+
+    pub fn get_global(&self, name: &str) -> Option<GlobalId> {
+        self.globals
+            .iter()
+            .find_map(|(id, data)| (data.name == name).then_some(id))
+    }
+
+    pub fn get_function_value(&self, func: FunctionId) -> Option<GlobalId> {
+        self.function_globals.get(&func).copied()
+    }
+
+    pub fn as_function_value(&self, value: ValueId) -> Option<FunctionId> {
+        match value {
+            ValueId::Global(global) => match self.global(global).kind {
+                GlobalKind::Function(func) => Some(func),
+                GlobalKind::GlobalVariable { .. } => None,
+            },
+            _ => None,
+        }
+    }
+
+    pub fn define_function_value(&mut self, name: String, ty: FunctionTypePtr) -> FunctionId {
+        let func = self.define_function(name.clone(), ty.clone());
+        let global_ty: TypePtr = Rc::new(Type::Function(FunctionType(
+            ty.0.as_function().unwrap().0.clone(),
+            ty.0.as_function().unwrap().1.clone(),
+        )));
+        self.add_global(name, global_ty, GlobalKind::Function(func));
+        func
+    }
+
+    pub fn create_function_value(&mut self, name: String, ty: FunctionTypePtr) -> FunctionId {
+        let func = self.create_function(name.clone(), ty.clone());
+        let global_ty: TypePtr = Rc::new(Type::Function(FunctionType(
+            ty.0.as_function().unwrap().0.clone(),
+            ty.0.as_function().unwrap().1.clone(),
+        )));
+        self.add_global(name, global_ty, GlobalKind::Function(func));
+        func
+    }
+
+    pub fn declare_function_value(&mut self, name: String, ty: FunctionTypePtr) -> FunctionId {
+        let func = self.declare_function(name.clone(), ty.clone());
+        let global_ty: TypePtr = Rc::new(Type::Function(FunctionType(
+            ty.0.as_function().unwrap().0.clone(),
+            ty.0.as_function().unwrap().1.clone(),
+        )));
+        self.add_global(name, global_ty, GlobalKind::Function(func));
+        func
     }
 
     pub(crate) fn new_inst(
