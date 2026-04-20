@@ -30,7 +30,7 @@ fn my_ir() {
 #[test]
 fn ir_1_asm() {
     let escape_list: [&str; 0] = [];
-    run_test_cases_with_reimu(&escape_list, "RCompiler-Testcases/IR-1", true);
+    run_test_cases_with_reimu(&escape_list, "RCompiler-Testcases/IR-1", false);
 }
 
 fn require_reimu_path() -> String {
@@ -152,6 +152,7 @@ fn run_test_cases_with_reimu(escape_list: &[&str], case_path: &str, stop_at_faul
 
             let mut lowerer = RV32Lowerer::with_options(LowerOptions {
                 lower_function_bodies: true,
+                need_branch_relaxation: true,
             });
             let machine_module = lowerer
                 .lower_module(generator.llvm_module())

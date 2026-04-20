@@ -2,6 +2,7 @@ pub(crate) mod layout;
 pub(crate) mod logue;
 pub(crate) mod phi;
 pub(crate) mod regalloc;
+pub(crate) mod branch_relax;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -33,6 +34,7 @@ use crate::mir::TargetInst;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LowerOptions {
     pub lower_function_bodies: bool,
+    pub need_branch_relaxation: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -631,6 +633,10 @@ impl<T: LoweringTarget> Lowerer<T> {
         self.compute_frame_layout(&mut machine_function);
         self.insert_logue(&mut machine_function);
         self.expand_pseudo_instructions(&mut machine_function);
+
+        if self.options.need_branch_relaxation {
+            self.relax_branches(&mut machine_function)?;
+        }
 
         Ok(machine_function)
     }

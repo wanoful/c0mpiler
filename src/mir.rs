@@ -8,7 +8,7 @@ pub(crate) use macros::*;
 use std::{
     collections::{HashMap, HashSet},
     fmt::{Debug, Display},
-    hash::Hash,
+    hash::Hash, ops::RangeInclusive,
 };
 
 use crate::mir::print::InstPrinter;
@@ -27,6 +27,8 @@ pub trait TargetArch: Clone + 'static {
         Self: Sized;
 
     fn is_callee_saved(reg: Self::PhysicalReg) -> bool;
+
+    fn branch_offset_range() -> RangeInclusive<isize>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -70,6 +72,10 @@ pub trait TargetInst {
         Self: Sized;
 
     fn is_call(&self) -> bool;
+
+    fn size_in_bytes(&self) -> usize;
+
+    fn get_branch_target(&mut self) -> Option<& mut BlockId>;
 }
 
 pub trait LoweringTarget: TargetArch + Default {

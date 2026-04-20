@@ -1,5 +1,7 @@
 pub(crate) mod print;
 
+use std::ops::RangeInclusive;
+
 use crate::{
     impossible,
     mir::{
@@ -48,6 +50,10 @@ impl TargetArch for RV32Arch {
                 | RV32Reg::S10
                 | RV32Reg::S11
         )
+    }
+
+    fn branch_offset_range() -> RangeInclusive<isize> {
+        -4096..=4095
     }
 }
 
@@ -385,6 +391,22 @@ impl TargetInst for RV32Inst {
         match self {
             RV32Inst::Call { .. } => true,
             _ => false,
+        }
+    }
+
+    fn size_in_bytes(&self) -> usize {
+        4
+    }
+
+    fn get_branch_target(&mut self) -> Option<&mut BlockId> {
+        match self {
+            RV32Inst::Beq { label, .. }
+            | RV32Inst::Bne { label, .. }
+            | RV32Inst::Blt { label, .. }
+            | RV32Inst::Bge { label, .. }
+            | RV32Inst::Bltu { label, .. }
+            | RV32Inst::Bgeu { label, .. } => Some(label),
+            _ => None,
         }
     }
 }
