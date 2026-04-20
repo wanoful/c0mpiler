@@ -102,11 +102,12 @@ impl<T: TargetArch> ModulePrinter<'_, T> {
         writeln!(f, "    {}", section_name(segment))?;
         writeln!(f)?;
 
-        for (idx, symbol) in symbols.iter().enumerate() {
-            if idx > 0 {
+        let mut last_printed = false;
+        for symbol in symbols.iter() {
+            if last_printed {
                 writeln!(f)?;
             }
-            self.print_symbol(f, symbol)?;
+            last_printed = self.print_symbol(f, symbol)?;
         }
 
         Ok(())
@@ -116,7 +117,7 @@ impl<T: TargetArch> ModulePrinter<'_, T> {
         &self,
         f: &mut std::fmt::Formatter<'_>,
         symbol: &MachineSymbol<T>,
-    ) -> std::fmt::Result {
+    ) -> Result<bool, std::fmt::Error> {
         match &symbol.kind {
             MachineSymbolKind::Function(func) => {
                 self.print_symbol_header(f, symbol)?;
@@ -129,7 +130,9 @@ impl<T: TargetArch> ModulePrinter<'_, T> {
                     }
                 )?;
             }
-            MachineSymbolKind::ExternalPlaceholder => {}
+            MachineSymbolKind::ExternalPlaceholder => {
+                return Ok(false);
+            }
             MachineSymbolKind::Data(bytes) => {
                 self.print_symbol_header(f, symbol)?;
                 self.print_data_object(f, bytes)?;
@@ -139,7 +142,7 @@ impl<T: TargetArch> ModulePrinter<'_, T> {
                 writeln!(f, "    .zero {size}")?;
             }
         }
-        Ok(())
+        Ok(true)
     }
 
     fn print_symbol_header(
