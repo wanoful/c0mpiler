@@ -184,6 +184,7 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
                         value_ptr: arg.clone().into(),
                         kind,
                     },
+                    core_value: None,
                     self_id: 0,
                     is_temp_value: false,
                 },
@@ -353,6 +354,7 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
             pat,
             PatExtra {
                 value,
+                core_value: None,
                 self_id: 0,
                 is_temp_value,
             },
@@ -1414,15 +1416,18 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
         RefPat(pat, _): &'ast RefPat,
         PatExtra {
             value,
+            core_value,
             self_id: _,
             is_temp_value,
         }: Self::PatExtra<'tmp>,
     ) -> Self::PatRes<'_> {
         let new_value = self.get_value_ptr(value);
+        let new_core_value = core_value.map(|value| self.core_get_value_ptr(value));
         self.visit_pat(
             pat,
             PatExtra {
                 value: new_value,
+                core_value: new_core_value,
                 self_id: 0,
                 is_temp_value,
             },
