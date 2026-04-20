@@ -446,7 +446,8 @@ impl<T: LoweringTarget> Lowerer<T> {
             self.ensure_symbol_absent(machine_module, &name)?;
 
             let is_external = function.as_function().blocks.borrow().is_empty();
-            let linkage = if is_external {
+            let is_entry_main = name == "main";
+            let linkage = if is_external || is_entry_main {
                 Linkage::External
             } else {
                 Linkage::Internal
@@ -748,8 +749,38 @@ impl<T: LoweringTarget> Lowerer<T> {
                 state.record_vreg(instruction, rd_vreg);
             }
             Call => {
-                let func_id = machine_module.symbol_map[&operands[0].get_name().unwrap()];
-                let args = &operands[1..];
+                let raw_callee_name = operands[0].get_name().unwrap();
+                let (callee_name, args) = if raw_callee_name.starts_with("llvm.memcpy.")
+                    || raw_callee_name.starts_with("llvm.memmove.")
+                {
+                    // LLVM memory intrinsics include a trailing volatile flag.
+                    // The target runtime exposes libc memcpy/memmove(dst, src, len).
+                    let mem_args = if operands.len() >= 5 {
+                        &operands[1..4]
+                    } else {
+                        &operands[1..]
+                    };
+                    let libc_symbol = if raw_callee_name.starts_with("llvm.memmove.") {
+                        "memmove"
+                    } else {
+                        "memcpy"
+                    };
+                    (libc_symbol.to_string(), mem_args)
+                } else {
+                    (raw_callee_name, &operands[1..])
+                };
+
+                let func_id = if let Some(symbol_id) = machine_module.symbol_map.get(&callee_name) {
+                    *symbol_id
+                } else {
+                    machine_module.new_symbol(
+                        callee_name,
+                        MachineSymbolKind::ExternalPlaceholder,
+                        MachineSegment::Text,
+                        Linkage::External,
+                        4,
+                    )
+                };
                 let num_args = args.len();
                 let stack_arg_size =
                     num_args.saturating_sub(T::num_arg_regs()) * T::stack_arg_size();
