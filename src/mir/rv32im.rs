@@ -566,6 +566,10 @@ impl LoweringTarget for RV32Arch {
         }
     }
 
+    fn emit_load_symbol_addr(rd: Reg, symbol: SymbolId) -> Self::MachineInst {
+        RV32Inst::La { rd, label: symbol }
+    }
+
     fn emit_store_mem(rs1: Reg, rs2: Reg, imm: i32, size: usize) -> Self::MachineInst {
         match size {
             1 => RV32Inst::Sb { rs1, rs2, imm },

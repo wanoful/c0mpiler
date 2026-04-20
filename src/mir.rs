@@ -223,6 +223,10 @@ pub trait LoweringTarget: TargetArch + Default {
         size: usize,
         unsigned: bool,
     ) -> Self::MachineInst;
+    fn emit_load_symbol_addr(
+        rd: Register<Self::PhysicalReg>,
+        symbol: SymbolId,
+    ) -> Self::MachineInst;
     fn emit_store_mem(
         rs1: Register<Self::PhysicalReg>,
         rs2: Register<Self::PhysicalReg>,

@@ -170,7 +170,7 @@ impl<T: TargetArch> ModulePrinter<'_, T> {
             return Ok(());
         }
 
-        write!(f, "    .byte")?;
+        write!(f, "    .byte ")?;
         for (i, b) in bytes.iter().enumerate() {
             if i > 0 {
                 write!(f, ", ")?;

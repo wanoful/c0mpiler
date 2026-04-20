@@ -95,12 +95,24 @@ impl Display for LowerError {
 
 impl Error for LowerError {}
 
-fn lower_operand<R: TargetArch>(
+fn lower_operand<R: LoweringTarget>(
     operand: &ValuePtr,
     out: &mut Vec<R::MachineInst>,
     state: &FunctionLoweringState,
     machine_function: &mut MachineFunction<R>,
+    machine_module: &MachineModule<R>,
 ) -> Result<Register<R::PhysicalReg>, LowerError> {
+    if operand.kind.is_global_object() {
+        let name = operand.get_name().ok_or_else(|| LowerError::UnknownBlock {
+            function: state.function_name.clone(),
+            block_name: None,
+        })?;
+        let symbol_id = machine_module.symbol_map[&name];
+        let rd = Register::Virtual(machine_function.new_vreg());
+        out.push(R::emit_load_symbol_addr(rd, symbol_id));
+        return Ok(rd);
+    }
+
     if let ValueKind::Constant(Constant::ConstantInt(number)) = &operand.kind {
         let vreg = machine_function.new_vreg();
         out.push(R::MachineInst::load_imm(
@@ -201,15 +213,16 @@ fn resolve_parallel_copy<R: TargetArch>(
     out
 }
 
-fn parallel_copy<R: TargetArch>(
+fn parallel_copy<R: LoweringTarget>(
     phis: Vec<(VRegId, ValuePtr)>,
     out: &mut Vec<R::MachineInst>,
     state: &mut FunctionLoweringState,
     machine_function: &mut MachineFunction<R>,
+    machine_module: &MachineModule<R>,
 ) -> Result<(), LowerError> {
     let mut moves = Vec::with_capacity(phis.len());
     for (dst, value) in phis {
-        let src = lower_operand(&value, out, state, machine_function)?;
+        let src = lower_operand(&value, out, state, machine_function, machine_module)?;
         moves.push((Register::Virtual(dst), src));
     }
     out.extend(resolve_parallel_copy(moves, machine_function));
@@ -246,6 +259,7 @@ fn emit_add_offset<T: LoweringTarget>(
     out: &mut Vec<T::MachineInst>,
     machine_function: &mut MachineFunction<T>,
     state: &mut FunctionLoweringState,
+    machine_module: &MachineModule<T>,
 ) -> Result<Register<T::PhysicalReg>, LowerError> {
     if let ValueKind::Constant(Constant::ConstantInt(number)) = &index.kind {
         let imm = (number.0 as i32).checked_mul(stride as i32).unwrap();
@@ -265,7 +279,7 @@ fn emit_add_offset<T: LoweringTarget>(
             return Ok(base);
         }
 
-        let index_reg = lower_operand(index, out, state, machine_function)?;
+        let index_reg = lower_operand(index, out, state, machine_function, machine_module)?;
         let temp_reg = Register::Virtual(machine_function.new_vreg());
         if stride.is_power_of_two() {
             out.push(T::emit_slli(
@@ -562,8 +576,7 @@ impl<T: LoweringTarget> Lowerer<T> {
             }
             Constant::ConstantString(ConstantString(string)) => {
                 let mut bytes = string.as_bytes().to_vec();
-                bytes.push(0);
-                assert!(bytes.len() <= type_layout.layout.size as usize);
+                assert!(bytes.len() <= type_layout.layout.size as usize, "String constant is {} bytes, but type layout size is {}", bytes.len(), type_layout.layout.size);
                 bytes.resize(type_layout.layout.size as usize, 0);
                 Ok(bytes)
             }
@@ -691,7 +704,8 @@ impl<T: LoweringTarget> Lowerer<T> {
             Binary(binary_opcode) => {
                 use crate::ir::ir_value::BinaryOpcode::*;
 
-                let rs1 = lower_operand(&operands[0], &mut out, state, machine_function)?;
+                let rs1 =
+                    lower_operand(&operands[0], &mut out, state, machine_function, machine_module)?;
 
                 if let crate::ir::ir_value::ValueKind::Constant(Constant::ConstantInt(number)) =
                     &operands[1].kind
@@ -725,7 +739,8 @@ impl<T: LoweringTarget> Lowerer<T> {
                     }
                 }
 
-                let rs2 = lower_operand(&operands[1], &mut out, state, machine_function)?;
+                let rs2 =
+                    lower_operand(&operands[1], &mut out, state, machine_function, machine_module)?;
                 let rd_vreg = machine_function.new_vreg();
                 let rd = Register::Virtual(rd_vreg);
 
@@ -787,7 +802,15 @@ impl<T: LoweringTarget> Lowerer<T> {
                 machine_function.record_outgoing_arg(stack_arg_size);
 
                 for (index, arg) in args.iter().enumerate() {
-                    let rs = lower_operand(arg, &mut out, state, machine_function)?;
+                    let rs = if arg.kind.is_global_object() {
+                        let name = arg.get_name().unwrap();
+                        let symbol_id = machine_module.symbol_map[&name];
+                        let rd = Register::Virtual(machine_function.new_vreg());
+                        out.push(T::emit_load_symbol_addr(rd, symbol_id));
+                        rd
+                    } else {
+                        lower_operand(arg, &mut out, state, machine_function, machine_module)?
+                    };
                     if index < T::num_arg_regs() {
                         out.push(T::MachineInst::mv(
                             Register::Physical(T::arg_reg(index)),
@@ -824,7 +847,8 @@ impl<T: LoweringTarget> Lowerer<T> {
                 };
 
                 if *has_cond {
-                    let cond = lower_operand(&operands[0], &mut out, state, machine_function)?;
+                    let cond =
+                        lower_operand(&operands[0], &mut out, state, machine_function, machine_module)?;
                     let mut true_block_id = state
                         .block_id(&BasicBlockPtr(operands[1].clone()))
                         .ok_or_else(|| LowerError::UnknownBlock {
@@ -857,6 +881,7 @@ impl<T: LoweringTarget> Lowerer<T> {
                                 &mut transit_insts,
                                 state,
                                 machine_function,
+                                machine_module,
                             )?;
                             transit_insts.push(T::emit_jump(target_block_id));
                             let transit_block = MachineBlock {
@@ -903,14 +928,21 @@ impl<T: LoweringTarget> Lowerer<T> {
                     if let Some(target_block_phis) = target_block_phis
                         && !target_block_phis.is_empty()
                     {
-                        parallel_copy(target_block_phis, &mut out, state, machine_function)?;
+                        parallel_copy(
+                            target_block_phis,
+                            &mut out,
+                            state,
+                            machine_function,
+                            machine_module,
+                        )?;
                     }
 
                     out.push(T::emit_jump(target_block_id));
                 }
             }
             GetElementPtr { base_ty } => {
-                let mut base = lower_operand(&operands[0], &mut out, state, machine_function)?;
+                let mut base =
+                    lower_operand(&operands[0], &mut out, state, machine_function, machine_module)?;
                 let base_index = &operands[1];
                 let indices = &operands[2..];
 
@@ -923,6 +955,7 @@ impl<T: LoweringTarget> Lowerer<T> {
                     &mut out,
                     machine_function,
                     state,
+                    machine_module,
                 )?;
 
                 for index in indices {
@@ -965,6 +998,7 @@ impl<T: LoweringTarget> Lowerer<T> {
                                 &mut out,
                                 machine_function,
                                 state,
+                                machine_module,
                             )?;
                             ty = ty.as_array().unwrap().0.clone();
                         }
@@ -1015,7 +1049,13 @@ impl<T: LoweringTarget> Lowerer<T> {
                 } else {
                     (
                         None,
-                        lower_operand(&operands[0], &mut out, state, machine_function)?,
+                        lower_operand(
+                            &operands[0],
+                            &mut out,
+                            state,
+                            machine_function,
+                            machine_module,
+                        )?,
                     )
                 };
 
@@ -1044,13 +1084,15 @@ impl<T: LoweringTarget> Lowerer<T> {
             }
             Ret { is_void } => {
                 if !*is_void {
-                    let rs = lower_operand(&operands[0], &mut out, state, machine_function)?;
+                    let rs =
+                        lower_operand(&operands[0], &mut out, state, machine_function, machine_module)?;
                     out.push(T::MachineInst::mv(Register::Physical(T::return_reg()), rs));
                 }
                 out.push(T::emit_ret());
             }
             Store => {
-                let rs2 = lower_operand(&operands[0], &mut out, state, machine_function)?;
+                let rs2 =
+                    lower_operand(&operands[0], &mut out, state, machine_function, machine_module)?;
                 let addr = &operands[1];
                 let type_layout = module.get_type_layout(operands[0].get_type()).unwrap();
                 if addr.kind.is_global_object() {
@@ -1068,7 +1110,7 @@ impl<T: LoweringTarget> Lowerer<T> {
                         _ => panic!("unsupported store size"),
                     }
                 } else {
-                    let rs1 = lower_operand(addr, &mut out, state, machine_function)?;
+                    let rs1 = lower_operand(addr, &mut out, state, machine_function, machine_module)?;
                     match type_layout.layout.size as usize {
                         1 | 2 | 4 => {
                             out.push(T::emit_store_mem(
@@ -1083,8 +1125,10 @@ impl<T: LoweringTarget> Lowerer<T> {
                 }
             }
             Icmp(icmp_code) => {
-                let rs1 = lower_operand(&operands[0], &mut out, state, machine_function)?;
-                let rs2 = lower_operand(&operands[1], &mut out, state, machine_function)?;
+                let rs1 =
+                    lower_operand(&operands[0], &mut out, state, machine_function, machine_module)?;
+                let rs2 =
+                    lower_operand(&operands[1], &mut out, state, machine_function, machine_module)?;
                 let rd_vreg = machine_function.new_vreg();
                 let rd = Register::Virtual(rd_vreg);
                 emit_icmp(icmp_code, rd, rs1, rs2, &mut out, machine_function);
@@ -1097,9 +1141,12 @@ impl<T: LoweringTarget> Lowerer<T> {
                 );
             }
             Select => {
-                let cond = lower_operand(&operands[0], &mut out, state, machine_function)?;
-                let true_val = lower_operand(&operands[1], &mut out, state, machine_function)?;
-                let false_val = lower_operand(&operands[2], &mut out, state, machine_function)?;
+                let cond =
+                    lower_operand(&operands[0], &mut out, state, machine_function, machine_module)?;
+                let true_val =
+                    lower_operand(&operands[1], &mut out, state, machine_function, machine_module)?;
+                let false_val =
+                    lower_operand(&operands[2], &mut out, state, machine_function, machine_module)?;
 
                 let mask1 = machine_function.new_vreg();
                 let mask2 = machine_function.new_vreg();
@@ -1135,14 +1182,16 @@ impl<T: LoweringTarget> Lowerer<T> {
                 state.record_vreg(instruction, rd_vreg);
             }
             PtrToInt => {
-                let src = lower_operand(&operands[0], &mut out, state, machine_function)?;
+                let src =
+                    lower_operand(&operands[0], &mut out, state, machine_function, machine_module)?;
                 let rd_vreg = machine_function.new_vreg();
                 out.push(T::MachineInst::mv(Register::Virtual(rd_vreg), src));
                 state.record_vreg(instruction, rd_vreg);
             }
             Trunc => {
                 let dst_ty = instruction.get_type();
-                let src = lower_operand(&operands[0], &mut out, state, machine_function)?;
+                let src =
+                    lower_operand(&operands[0], &mut out, state, machine_function, machine_module)?;
                 let dst_bits = dst_ty.as_int().unwrap().0;
                 let masked = emit_masked_value(src, dst_bits, &mut out, machine_function);
                 let rd_vreg = match masked {
@@ -1152,7 +1201,8 @@ impl<T: LoweringTarget> Lowerer<T> {
                 state.record_vreg(instruction, rd_vreg);
             }
             Zext => {
-                let src = lower_operand(&operands[0], &mut out, state, machine_function)?;
+                let src =
+                    lower_operand(&operands[0], &mut out, state, machine_function, machine_module)?;
                 let src_bits = operands[0].get_type().as_int().unwrap().0;
                 let extended = emit_masked_value(src, src_bits, &mut out, machine_function);
                 let rd_vreg = match extended {
@@ -1162,7 +1212,8 @@ impl<T: LoweringTarget> Lowerer<T> {
                 state.record_vreg(instruction, rd_vreg);
             }
             Sext => {
-                let src = lower_operand(&operands[0], &mut out, state, machine_function)?;
+                let src =
+                    lower_operand(&operands[0], &mut out, state, machine_function, machine_module)?;
                 let rd_vreg = machine_function.new_vreg();
                 let src_bits = operands[0].get_type().as_int().unwrap().0;
                 if src_bits >= 32 {
