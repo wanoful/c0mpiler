@@ -5,6 +5,10 @@ pub mod ir_output;
 pub mod ir_type;
 pub mod ir_value;
 pub mod layout;
+pub mod core;
+pub mod core_value;
+pub mod core_inst;
+pub mod core_builder;
 
 use std::{
     cell::RefCell,
