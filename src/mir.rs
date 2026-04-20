@@ -1,18 +1,24 @@
 pub mod lower;
 pub(crate) mod macros;
+pub(crate) mod print;
 pub mod rv32im;
 
 pub(crate) use macros::*;
 
 use std::{
     collections::{HashMap, HashSet},
-    fmt::Debug,
+    fmt::{Debug, Display},
     hash::Hash,
 };
 
+use crate::mir::print::InstPrinter;
+
 pub trait TargetArch: Clone + 'static {
-    type PhysicalReg: Clone + Copy + PartialEq + Eq + Hash + Debug + PartialOrd + Ord;
+    type PhysicalReg: Clone + Copy + PartialEq + Eq + Hash + Debug + PartialOrd + Ord + Display;
     type MachineInst: TargetInst<PhysicalReg = Self::PhysicalReg> + Clone + Debug;
+    type InstPrinter<'a>: InstPrinter<'a, Self>
+    where
+        Self: Sized;
 
     fn get_allocatable_regs() -> Vec<Self::PhysicalReg>;
 
@@ -32,14 +38,14 @@ pub struct SymbolId(pub usize);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Register<R>
 where
-    R: Clone + Copy + PartialEq + Eq + Hash + Debug,
+    R: Clone + Copy + PartialEq + Eq + Hash + Debug + Display,
 {
     Virtual(VRegId),
     Physical(R),
 }
 
 pub trait TargetInst {
-    type PhysicalReg: Clone + Copy + PartialEq + Eq + Hash + Debug;
+    type PhysicalReg: Clone + Copy + PartialEq + Eq + Hash + Debug + Display;
 
     fn def_regs(&self) -> Vec<Register<Self::PhysicalReg>>;
     fn use_regs(&self) -> Vec<Register<Self::PhysicalReg>>;
@@ -227,6 +233,7 @@ pub trait LoweringTarget: TargetArch + Default {
         rs: Register<Self::PhysicalReg>,
         symbol: SymbolId,
         size: usize,
+        rt: Register<Self::PhysicalReg>,
     ) -> Self::MachineInst;
 
     fn emit_store_outgoing_arg(rs: Register<Self::PhysicalReg>, offset: i32) -> Self::MachineInst;
@@ -245,7 +252,10 @@ pub trait LoweringTarget: TargetArch + Default {
 
     fn emit_adjust_sp(offset: isize) -> Vec<Self::MachineInst>;
 
-    fn expand_pseudo(inst: &Self::MachineInst, frame_layout: &FrameLayout<Self>) -> Vec<Self::MachineInst>
+    fn expand_pseudo(
+        inst: &Self::MachineInst,
+        frame_layout: &FrameLayout<Self>,
+    ) -> Vec<Self::MachineInst>
     where
         Self: Sized;
 }
@@ -362,6 +372,7 @@ pub enum MachineSymbolKind<T: TargetArch> {
     Bss { size: usize },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MachineSegment {
     Text,
     Data,
@@ -382,6 +393,7 @@ pub struct MachineSymbol<T: TargetArch> {
 pub struct MachineModule<T: TargetArch> {
     pub symbols: Vec<MachineSymbol<T>>,
     pub symbol_map: HashMap<String, SymbolId>,
+    pub symbol_names: HashMap<SymbolId, String>,
 }
 
 impl<T: TargetArch> Default for MachineModule<T> {
@@ -389,6 +401,7 @@ impl<T: TargetArch> Default for MachineModule<T> {
         Self {
             symbols: Vec::new(),
             symbol_map: HashMap::new(),
+            symbol_names: HashMap::new(),
         }
     }
 }
@@ -407,12 +420,13 @@ impl<T: TargetArch> MachineModule<T> {
         debug_assert!(replaced.is_none(), "Symbol name '{}' already exists", name);
         self.symbols.push(MachineSymbol {
             id,
-            name,
+            name: name.clone(),
             kind,
             segment,
             linkage,
             alignment,
         });
+        self.symbol_names.insert(id, name);
         id
     }
 }
@@ -535,4 +549,11 @@ impl<T: TargetArch> LivenessInfo<T> {
 struct ControlFlowGraph {
     pub succs: HashMap<BlockId, HashSet<BlockId>>,
     pub preds: HashMap<BlockId, HashSet<BlockId>>,
+}
+
+impl<T: TargetArch> Display for MachineModule<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let printer = print::ModulePrinter { module: self };
+        write!(f, "{}", printer)
+    }
 }

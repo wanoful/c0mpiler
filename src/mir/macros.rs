@@ -75,6 +75,14 @@ macro_rules! generate_reg_rewrite {
                     ),*
                 }
             }
+
+            $vis fn variant_name(&self) -> &'static str {
+                match self {
+                    $(
+                        Self::$variant { .. } => paste::paste!(stringify!([<$variant:lower>])),
+                    )*
+                }
+            }
         }
     }
 }

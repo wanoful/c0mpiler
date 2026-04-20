@@ -1,8 +1,10 @@
+pub(crate) mod print;
+
 use crate::{
     impossible,
     mir::{
         BlockId, FrameLayout, LoweringTarget, Register, StackSlotId, SymbolId, TargetArch,
-        TargetInst, generate_reg_rewrite,
+        TargetInst, generate_reg_rewrite, rv32im::print::RV32InstPrinter,
     },
 };
 
@@ -12,6 +14,7 @@ pub struct RV32Arch;
 impl TargetArch for RV32Arch {
     type PhysicalReg = RV32Reg;
     type MachineInst = RV32Inst;
+    type InstPrinter<'a> = RV32InstPrinter<'a>;
 
     fn get_allocatable_regs() -> Vec<Self::PhysicalReg> {
         use RV32Reg::*;
