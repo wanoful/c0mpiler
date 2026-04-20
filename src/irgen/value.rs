@@ -282,11 +282,17 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     ) -> CoreValueContainer {
         match &value.kind {
             CoreContainerKind::Raw { .. } => {
-                let raw_ty = self.core_module.borrow().value_ty(value.value).clone();
-                if raw_ty.is_aggregate_type() {
-                    self.core_get_value_ptr(value)
-                } else {
-                    value
+                match value.kind.clone() {
+                    CoreContainerKind::Raw { fat: Some(..) } => value,
+                    CoreContainerKind::Raw { fat: None } => {
+                        let raw_ty = self.core_module.borrow().value_ty(value.value).clone();
+                        if raw_ty.is_aggregate_type() {
+                            self.core_get_value_ptr(value)
+                        } else {
+                            value
+                        }
+                    }
+                    CoreContainerKind::Ptr(..) => unreachable!(),
                 }
             }
             CoreContainerKind::Ptr(ty) => {

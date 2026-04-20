@@ -406,7 +406,7 @@ impl ModuleCore {
 
     pub fn add_string_const(&mut self, value: impl Into<String>) -> ConstId {
         let value = value.into();
-        let len = value.len() as u32 + 1;
+        let len = value.len() as u32;
         let ty = Rc::new(Type::Array(crate::ir::ir_type::ArrayType(
             Rc::new(Type::Int(IntType(8))),
             len,

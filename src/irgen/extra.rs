@@ -1,6 +1,6 @@
 use crate::{
     ast::NodeId,
-    ir::core::ValueId,
+    ir::core::{BlockRef, ValueId},
     ir::ir_value::{ArgumentPtr, BasicBlockPtr, ValuePtr},
     irgen::value::{CoreValueContainer, ValuePtrContainer},
     semantics::{item::AssociatedInfo, resolved_ty::ResolvedTyInstance},
@@ -14,11 +14,19 @@ pub(crate) struct CycleInfo<'tmp> {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub(crate) struct CoreCycleInfo {
+    pub(crate) continue_bb: BlockRef,
+    pub(crate) next_bb: BlockRef,
+    pub(crate) value: Option<ValueId>,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct ExprExtra<'tmp> {
     pub(crate) scope_id: NodeId,
     pub(crate) self_id: NodeId,
 
     pub(crate) cycle_info: Option<CycleInfo<'tmp>>,
+    pub(crate) core_cycle_info: Option<CoreCycleInfo>,
     pub(crate) ret_ptr: Option<&'tmp ArgumentPtr>,
     pub(crate) core_ret_ptr: Option<ValueId>,
 

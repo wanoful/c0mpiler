@@ -50,8 +50,8 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
             self.builder.build_call(func, args, None);
 
             if let (Some(core_value1), Some(core_value2)) = (
-                self.get_core_expr_value(&expr1.id),
-                self.get_core_expr_value(&expr2.id),
+                self.core_branch_value(expr1),
+                self.core_branch_value(expr2),
             ) {
                 let ret = self.build_core_alloca(string_ty.clone(), None);
                 let func = self.core_module.borrow().get_function("string_plus").unwrap();
@@ -82,8 +82,8 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
 
             let intern = self.analyzer.get_expr_type(&extra.self_id);
             if let (Some(core_value1), Some(core_value2)) = (
-                self.get_core_expr_value(&expr1.id),
-                self.get_core_expr_value(&expr2.id),
+                self.core_branch_value(expr1),
+                self.core_branch_value(expr2),
             ) {
                 let raw1 = self.core_get_raw_value(core_value1);
                 let raw2 = self.core_get_raw_value(core_value2);
@@ -253,8 +253,8 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         );
 
         if let (Some(core_value1), Some(core_value2)) = (
-            self.get_core_expr_value(&expr1.id),
-            self.get_core_expr_value(&expr2.id),
+            self.core_branch_value(expr1),
+            self.core_branch_value(expr2),
         ) {
             let op_code = match bin_op {
                 BinOp::Eq => CoreICmpCode::Eq,
@@ -321,11 +321,18 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     ) -> Option<ValuePtrContainer> {
         let value1 = self.visit_expr(expr1, extra)?;
         let raw1 = self.get_raw_value(value1);
+        let core_raw1 = self
+            .core_branch_value(expr1)
+            .map(|value| self.core_get_raw_value(value));
 
         let current_fn = self.builder.get_current_function().clone();
         let current_bb = self.builder.get_current_basic_block().clone();
         let right_bb = self.context.append_basic_block(&current_fn, ".right");
         let next_bb = self.context.append_basic_block(&current_fn, ".next");
+        let current_core_fn = self.core_builder.get_current_function();
+        let current_core_bb = self.core_builder.get_current_basic_block();
+        let core_right_bb = self.core_builder.append_block(current_core_fn, Some(".right"));
+        let core_next_bb = self.core_builder.append_block(current_core_fn, Some(".next"));
 
         match bin_op {
             BinOp::And => self.try_build_conditional_branch(
@@ -342,20 +349,58 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
             ),
             _ => impossible!(),
         };
+        if let Some(core_raw1) = core_raw1 {
+            match bin_op {
+                BinOp::And => self.core_try_build_conditional_branch(
+                    core_raw1,
+                    core_right_bb,
+                    core_next_bb,
+                    &expr1.id,
+                ),
+                BinOp::Or => self.core_try_build_conditional_branch(
+                    core_raw1,
+                    core_next_bb,
+                    core_right_bb,
+                    &expr1.id,
+                ),
+                _ => impossible!(),
+            };
+        }
 
         self.builder
             .locate_end(current_fn.clone(), right_bb.clone());
+        self.core_builder.locate_end(current_core_fn, core_right_bb);
         let value2 = self.visit_expr(expr2, extra)?;
         let raw2 = self.get_raw_value(value2);
+        let core_raw2 = self
+            .core_branch_value(expr2)
+            .map(|value| self.core_get_raw_value(value));
         let new_right_bb = self.builder.get_current_basic_block().clone();
+        let new_core_right_bb = self.core_builder.get_current_basic_block();
         self.try_build_branch(next_bb.clone(), &expr2.id);
+        self.core_try_build_branch(core_next_bb, &expr2.id);
 
         self.builder.locate_end(current_fn.clone(), next_bb.clone());
+        self.core_builder.locate_end(current_core_fn, core_next_bb);
         let value = self.builder.build_phi(
             self.context.i1_type().into(),
             vec![(raw1, current_bb), (raw2, new_right_bb)],
             None,
         );
+        if let (Some(core_raw1), Some(core_raw2)) = (core_raw1, core_raw2) {
+            let value = self.core_builder.build_phi(
+                self.context.i1_type().into(),
+                vec![(core_raw1, current_core_bb), (core_raw2, new_core_right_bb)],
+                None,
+            );
+            self.set_core_expr_value(
+                extra.self_id,
+                CoreValueContainer {
+                    value: ValueId::Inst(value),
+                    kind: CoreContainerKind::Raw { fat: None },
+                },
+            );
+        }
 
         Some(ValuePtrContainer {
             value_ptr: value.into(),
@@ -366,6 +411,7 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     pub(crate) fn visit_ret_expr_impl(&mut self, inner_expr: Option<&'ast Expr>, extra: ExprExtra) {
         if let Some(e) = inner_expr {
             let v = self.visit_expr(e, extra);
+            let core_v = self.core_branch_value(e);
             if let Some(v) = v {
                 let v = if let Some(ret_ptr) = extra.ret_ptr {
                     self.store_to_ptr(ret_ptr.clone().into(), v);
@@ -375,8 +421,18 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                 };
                 self.builder.build_return(v);
             }
+            if let Some(core_v) = core_v {
+                if let Some(core_ret_ptr) = extra.core_ret_ptr {
+                    self.core_store_to_ptr(core_ret_ptr, core_v);
+                    self.core_builder.build_return(None);
+                } else {
+                    let raw = self.core_get_raw_value(core_v);
+                    self.core_builder.build_return(Some(raw));
+                }
+            }
         } else {
             self.builder.build_return(None);
+            self.core_builder.build_return(None);
         };
     }
 
@@ -402,6 +458,13 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         }
     }
 
+    pub fn core_try_build_branch(&mut self, dest: crate::ir::core::BlockRef, expr_id: &NodeId) {
+        let result = self.analyzer.get_expr_result(expr_id);
+        if result.interrupt.is_not() {
+            self.core_builder.build_branch(dest);
+        }
+    }
+
     pub fn try_build_conditional_branch(
         &self,
         cond: crate::ir::ir_value::ValuePtr,
@@ -412,6 +475,20 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         let result = self.analyzer.get_expr_result(expr_id);
         if result.interrupt.is_not() {
             self.builder.build_conditional_branch(cond, iftrue, ifelse);
+        }
+    }
+
+    pub fn core_try_build_conditional_branch(
+        &mut self,
+        cond: ValueId,
+        iftrue: crate::ir::core::BlockRef,
+        ifelse: crate::ir::core::BlockRef,
+        expr_id: &NodeId,
+    ) {
+        let result = self.analyzer.get_expr_result(expr_id);
+        if result.interrupt.is_not() {
+            self.core_builder
+                .build_conditional_branch(cond, iftrue, ifelse);
         }
     }
 

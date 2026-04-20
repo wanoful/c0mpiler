@@ -90,7 +90,7 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     }
 
     pub fn print(&self) -> String {
-        crate::ir::core::ModuleCore::from_legacy_module(&self.module).print()
+        self.core_module.borrow().print()
     }
 
     pub fn core_print(&self) -> String {
