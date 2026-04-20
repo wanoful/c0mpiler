@@ -4,6 +4,7 @@ impl<T: LoweringTarget> Lowerer<T> {
     pub(crate) fn insert_logue(&self, machine_function: &mut MachineFunction<T>) {
         let mut prologue_insts = Vec::new();
         let mut epilogue_inst_fns: Vec<Box<dyn Fn() -> Vec<T::MachineInst>>> = Vec::new();
+        let rt = Register::Physical(T::spill_scratch_regs()[0]);
 
         prologue_insts.extend(T::emit_adjust_sp(
             -(machine_function.frame_layout.frame_size as isize),
@@ -15,6 +16,7 @@ impl<T: LoweringTarget> Lowerer<T> {
             prologue_insts.push(T::emit_store_stack_slot(
                 Register::Physical(T::ra_reg()),
                 ra_slot,
+                rt,
             ));
             epilogue_inst_fns.push(Box::new(move || {
                 vec![T::emit_load_stack_slot(
@@ -36,6 +38,7 @@ impl<T: LoweringTarget> Lowerer<T> {
             prologue_insts.push(T::emit_store_stack_slot(
                 Register::Physical(callee_saved),
                 slot,
+                rt,
             ));
             epilogue_inst_fns.push(Box::new(move || {
                 vec![T::emit_load_stack_slot(

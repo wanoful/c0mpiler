@@ -51,6 +51,8 @@ pub trait TargetInst {
 
     fn def_regs(&self) -> Vec<Register<Self::PhysicalReg>>;
     fn use_regs(&self) -> Vec<Register<Self::PhysicalReg>>;
+    fn def_conflict_regs(&self) -> HashMap<Register<Self::PhysicalReg>, Vec<Register<Self::PhysicalReg>>>;
+
     fn is_terminator(&self) -> bool;
     fn is_ret(&self) -> bool;
     fn get_successors(&self) -> Vec<BlockId>;
@@ -246,9 +248,19 @@ pub trait LoweringTarget: TargetArch + Default {
         rt: Register<Self::PhysicalReg>,
     ) -> Self::MachineInst;
 
-    fn emit_store_outgoing_arg(rs: Register<Self::PhysicalReg>, offset: i32) -> Self::MachineInst;
-    fn emit_load_incoming_arg(rd: Register<Self::PhysicalReg>, offset: i32) -> Self::MachineInst;
-    fn emit_get_stack_addr(rd: Register<Self::PhysicalReg>, slot: StackSlotId)
+    fn emit_store_outgoing_arg(
+        rs: Register<Self::PhysicalReg>,
+        offset: i32,
+        rt: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst;
+    fn emit_load_incoming_arg(
+        rd: Register<Self::PhysicalReg>,
+        offset: i32,
+    ) -> Self::MachineInst;
+    fn emit_get_stack_addr(
+        rd: Register<Self::PhysicalReg>,
+        slot: StackSlotId,
+    )
     -> Self::MachineInst;
 
     fn emit_load_stack_slot(
@@ -258,6 +270,7 @@ pub trait LoweringTarget: TargetArch + Default {
     fn emit_store_stack_slot(
         rs: Register<Self::PhysicalReg>,
         slot: StackSlotId,
+        rt: Register<Self::PhysicalReg>,
     ) -> Self::MachineInst;
 
     fn emit_adjust_sp(offset: isize) -> Vec<Self::MachineInst>;

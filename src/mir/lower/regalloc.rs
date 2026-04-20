@@ -20,6 +20,7 @@ impl<T: LoweringTarget> InterferenceGraph<T> {
                 let live_after = liveness_info.get_live_after(block.id, index);
 
                 let defs: Vec<_> = inst.def_regs();
+                let conflict_regs = inst.def_conflict_regs();
 
                 for def in defs.iter() {
                     if let Register::Virtual(vreg_id) = def {
@@ -28,7 +29,8 @@ impl<T: LoweringTarget> InterferenceGraph<T> {
                 }
 
                 for def in defs.iter() {
-                    for x in live_after.iter() {
+                    let conflicts = conflict_regs.get(def).cloned().unwrap_or_default();
+                    for x in live_after.iter().chain(conflicts.iter()) {
                         use super::Register::*;
                         match (def, x) {
                             (Virtual(v1), Virtual(v2)) => {
@@ -212,7 +214,8 @@ impl<T: LoweringTarget> Lowerer<T> {
 
                 if defs_spilled {
                     let temp_out = def_map[&vreg_id];
-                    new_insts.push(T::emit_store_stack_slot(temp_out, slot));
+                    let rt = Register::Virtual(machine_function.new_vreg());
+                    new_insts.push(T::emit_store_stack_slot(temp_out, slot, rt));
                 }
             }
 

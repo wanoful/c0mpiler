@@ -1,6 +1,6 @@
 pub(crate) mod print;
 
-use std::ops::RangeInclusive;
+use std::{collections::HashMap, ops::RangeInclusive};
 
 use crate::{
     impossible,
@@ -22,7 +22,7 @@ impl TargetArch for RV32Arch {
         use RV32Reg::*;
         // 删除 T5, T6 以供溢出使用
         vec![
-            T0, T1, T2, T3, T4, S0, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, A0, A1, A2, A3,
+            T0, T1, T2, T3, T4, T5, S0, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, A0, A1, A2, A3,
             A4, A5, A6, A7,
         ]
     }
@@ -31,7 +31,7 @@ impl TargetArch for RV32Arch {
     where
         Self: Sized,
     {
-        &[RV32Reg::T5, RV32Reg::T6]
+        &[RV32Reg::T6]
     }
 
     fn is_callee_saved(reg: Self::PhysicalReg) -> bool {
@@ -167,8 +167,8 @@ pub enum RV32Inst {
     Tail { func: SymbolId, num_args: usize },
 
     LoadStack { rd: Reg, slot: StackSlotId },
-    SaveStack { rs: Reg, slot: StackSlotId },
-    StoreOutgoingArg { rs: Reg, offset: i32 },
+    SaveStack { rs: Reg, slot: StackSlotId, rt: Reg },
+    StoreOutgoingArg { rs: Reg, offset: i32, rt: Reg },
     LoadIncomingArg { rd: Reg, offset: i32 },
     GetStackAddr { rd: Reg, slot: StackSlotId },
 }
@@ -221,11 +221,15 @@ impl TargetInst for RV32Inst {
             | La { rd, .. }
             | Lbs { rd, .. }
             | Lhs { rd, .. }
-            | Lws { rd, .. }
-            | LoadStack { rd, .. }
-            | LoadIncomingArg { rd, .. }
-            | GetStackAddr { rd, .. } => vec![*rd],
-            Sbs { rt, .. } | Shs { rt, .. } | Sws { rt, .. } => vec![*rt],
+            | Lws { rd, .. } => vec![*rd],
+            LoadStack { rd, .. } | LoadIncomingArg { rd, .. } | GetStackAddr { rd, .. } => {
+                vec![*rd]
+            }
+            Sbs { rt, .. }
+            | Shs { rt, .. }
+            | Sws { rt, .. }
+            | SaveStack { rt, .. }
+            | StoreOutgoingArg { rt, .. } => vec![*rt],
             Call { .. } => {
                 vec![
                     Register::Physical(RV32Reg::Ra),
@@ -407,6 +411,18 @@ impl TargetInst for RV32Inst {
             | RV32Inst::Bltu { label, .. }
             | RV32Inst::Bgeu { label, .. } => Some(label),
             _ => None,
+        }
+    }
+
+    fn def_conflict_regs(
+        &self,
+    ) -> std::collections::HashMap<Register<Self::PhysicalReg>, Vec<Register<Self::PhysicalReg>>>
+    {
+        match self {
+            RV32Inst::SaveStack { rs, rt, .. } | RV32Inst::StoreOutgoingArg { rs, rt, .. } => {
+                [(*rt, vec![*rs])].into_iter().collect()
+            }
+            _ => HashMap::new(),
         }
     }
 }
@@ -610,8 +626,8 @@ impl LoweringTarget for RV32Arch {
         }
     }
 
-    fn emit_store_outgoing_arg(rs: Reg, offset: i32) -> Self::MachineInst {
-        RV32Inst::StoreOutgoingArg { rs, offset }
+    fn emit_store_outgoing_arg(rs: Reg, offset: i32, rt: Reg) -> Self::MachineInst {
+        RV32Inst::StoreOutgoingArg { rs, offset, rt }
     }
 
     fn emit_load_incoming_arg(rd: Reg, offset: i32) -> Self::MachineInst {
@@ -632,8 +648,9 @@ impl LoweringTarget for RV32Arch {
     fn emit_store_stack_slot(
         rs: Register<Self::PhysicalReg>,
         slot: StackSlotId,
+        rt: Register<Self::PhysicalReg>,
     ) -> Self::MachineInst {
-        RV32Inst::SaveStack { rs, slot }
+        RV32Inst::SaveStack { rs, slot, rt }
     }
 
     fn emit_adjust_sp(offset: isize) -> Vec<Self::MachineInst> {
@@ -677,26 +694,25 @@ impl LoweringTarget for RV32Arch {
                         imm: offset as i32,
                     }]
                 } else {
-                    let temp_reg = Self::spill_scratch_regs()[0];
                     vec![
                         RV32Inst::Li {
-                            rd: Register::Physical(temp_reg),
+                            rd: *rd,
                             imm: offset as i32,
                         },
                         RV32Inst::Add {
-                            rd: Register::Physical(temp_reg),
+                            rd: *rd,
                             rs1: Register::Physical(RV32Reg::Sp),
-                            rs2: Register::Physical(temp_reg),
+                            rs2: *rd,
                         },
                         RV32Inst::Lw {
                             rd: *rd,
-                            rs1: Register::Physical(temp_reg),
+                            rs1: *rd,
                             imm: 0,
                         },
                     ]
                 }
             }
-            SaveStack { rs, slot } => {
+            SaveStack { rs, slot, rt } => {
                 let offset = frame_layout.slot_offsets[slot];
                 if -2048 <= offset && offset <= 2047 {
                     vec![RV32Inst::Sw {
@@ -705,26 +721,25 @@ impl LoweringTarget for RV32Arch {
                         imm: offset as i32,
                     }]
                 } else {
-                    let temp_reg = Self::spill_scratch_regs()[0];
                     vec![
                         RV32Inst::Li {
-                            rd: Register::Physical(temp_reg),
+                            rd: *rt,
                             imm: offset as i32,
                         },
                         RV32Inst::Add {
-                            rd: Register::Physical(temp_reg),
+                            rd: *rt,
                             rs1: Register::Physical(RV32Reg::Sp),
-                            rs2: Register::Physical(temp_reg),
+                            rs2: *rt,
                         },
                         RV32Inst::Sw {
-                            rs1: Register::Physical(temp_reg),
+                            rs1: *rt,
                             rs2: *rs,
                             imm: 0,
                         },
                     ]
                 }
             }
-            StoreOutgoingArg { rs, offset } => {
+            StoreOutgoingArg { rs, offset, rt } => {
                 let offset = frame_layout.outgoing_arg_offset as i32 + *offset as i32;
                 if -2048 <= offset && offset <= 2047 {
                     vec![RV32Inst::Sw {
@@ -733,19 +748,18 @@ impl LoweringTarget for RV32Arch {
                         imm: offset,
                     }]
                 } else {
-                    let temp_reg = Self::spill_scratch_regs()[0];
                     vec![
                         RV32Inst::Li {
-                            rd: Register::Physical(temp_reg),
+                            rd: *rt,
                             imm: offset,
                         },
                         RV32Inst::Add {
-                            rd: Register::Physical(temp_reg),
+                            rd: *rt,
                             rs1: Register::Physical(RV32Reg::Sp),
-                            rs2: Register::Physical(temp_reg),
+                            rs2: *rt,
                         },
                         RV32Inst::Sw {
-                            rs1: Register::Physical(temp_reg),
+                            rs1: *rt,
                             rs2: *rs,
                             imm: 0,
                         },
@@ -761,20 +775,19 @@ impl LoweringTarget for RV32Arch {
                         imm: offset,
                     }]
                 } else {
-                    let temp_reg = Self::spill_scratch_regs()[0];
                     vec![
                         RV32Inst::Li {
-                            rd: Register::Physical(temp_reg),
+                            rd: *rd,
                             imm: offset,
                         },
                         RV32Inst::Add {
-                            rd: Register::Physical(temp_reg),
+                            rd: *rd,
                             rs1: Register::Physical(RV32Reg::Sp),
-                            rs2: Register::Physical(temp_reg),
+                            rs2: *rd,
                         },
                         RV32Inst::Lw {
                             rd: *rd,
-                            rs1: Register::Physical(temp_reg),
+                            rs1: *rd,
                             imm: 0,
                         },
                     ]
@@ -789,16 +802,15 @@ impl LoweringTarget for RV32Arch {
                         imm: offset,
                     }]
                 } else {
-                    let temp_reg = Self::spill_scratch_regs()[0];
                     vec![
                         RV32Inst::Li {
-                            rd: Register::Physical(temp_reg),
+                            rd: *rd,
                             imm: offset,
                         },
                         RV32Inst::Add {
                             rd: *rd,
                             rs1: Register::Physical(RV32Reg::Sp),
-                            rs2: Register::Physical(temp_reg),
+                            rs2: *rd,
                         },
                     ]
                 }

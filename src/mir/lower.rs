@@ -823,9 +823,11 @@ impl<T: LoweringTarget> Lowerer<T> {
                             rs,
                         ));
                     } else {
+                        let rt = Register::Virtual(machine_function.new_vreg());
                         out.push(T::emit_store_outgoing_arg(
                             rs,
                             T::stack_arg_offset(index - T::num_arg_regs()),
+                            rt,
                         ));
                     }
                 }
