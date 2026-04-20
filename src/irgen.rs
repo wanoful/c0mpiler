@@ -20,7 +20,7 @@ use crate::{
         ir_value::{ConstantPtr, InstructionPtr},
         layout::TargetDataLayout,
     },
-    irgen::value::ValuePtrContainer,
+    irgen::value::{CoreValueContainer, ValuePtrContainer},
     semantics::{
         analyzer::SemanticAnalyzer,
         resolved_ty::{ResolvedTy, ResolvedTyKind, TypeKey},
@@ -42,6 +42,7 @@ pub struct IRGenerator<'ast, 'analyzer> {
     pub(crate) analyzer: &'analyzer SemanticAnalyzer<'ast>,
 
     pub(crate) value_indexes: HashMap<ValueIndex, ValuePtrContainer>,
+    pub(crate) core_value_indexes: HashMap<ValueIndex, CoreValueContainer>,
 }
 
 impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
@@ -55,9 +56,10 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         let mut core_builder = CursorBuilder::new(core_module.clone());
         let core_alloca_builder = CursorBuilder::new(core_module.clone());
         let mut value_indexes = HashMap::default();
+        let mut core_value_indexes = HashMap::default();
 
         add_preludes(&context, &mut builder, &mut module, &mut value_indexes);
-        add_core_preludes(&context, &mut core_builder);
+        add_core_preludes(&context, &mut core_builder, &mut core_value_indexes);
 
         let mut generator = Self {
             context,
@@ -69,6 +71,7 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
             core_alloca_builder,
             analyzer,
             value_indexes,
+            core_value_indexes,
         };
 
         generator.add_struct_type();
@@ -156,14 +159,15 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
             let is_main_function = self.analyzer.is_main_function(s, scope_id);
             let full_name = self.analyzer.get_full_name(scope_id, s.clone());
 
-            let v = self.absorb_analyzer_global_value(value, is_main_function, full_name);
-            self.value_indexes.insert(
-                ValueIndex::Place(PlaceValueIndex {
-                    name: s.clone(),
-                    kind: crate::semantics::value::ValueIndexKind::Global { scope_id },
-                }),
-                v,
-            );
+            let v = self.absorb_analyzer_global_value(value, is_main_function, full_name.clone());
+            let core_v =
+                self.absorb_analyzer_global_value_core(value, is_main_function, full_name);
+            let index = ValueIndex::Place(PlaceValueIndex {
+                name: s.clone(),
+                kind: crate::semantics::value::ValueIndexKind::Global { scope_id },
+            });
+            self.value_indexes.insert(index.clone(), v);
+            self.core_value_indexes.insert(index, core_v);
         }
 
         for id in &scope.children {
@@ -251,6 +255,99 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         }
     }
 
+    fn absorb_analyzer_global_value_core(
+        &mut self,
+        value: &crate::semantics::value::Value<'ast>,
+        is_main_function: bool,
+        full_name: FullName,
+    ) -> CoreValueContainer {
+        use crate::semantics::value::ValueKind::*;
+
+        match &value.kind {
+            Constant(inner) => {
+                let init = self.create_constant_initialization_core(inner, value.ty);
+                let ty = self.core_module.borrow().const_data(init).ty.clone();
+                let global = self.core_module.borrow_mut().add_global(
+                    full_name.to_string(),
+                    ty.clone(),
+                    crate::ir::core_value::GlobalKind::GlobalVariable {
+                        is_constant: true,
+                        initializer: Some(init),
+                    },
+                );
+
+                CoreValueContainer {
+                    value: ValueId::Global(global),
+                    kind: crate::irgen::value::CoreContainerKind::Ptr(ty),
+                }
+            }
+            Fn { .. } => {
+                let mut fn_resolved_ty = self.analyzer.probe_type(value.ty).unwrap();
+
+                if is_main_function {
+                    *fn_resolved_ty.kind.as_fn_mut().unwrap().0 = self.analyzer.i32_type();
+                }
+
+                let (ret_intern, arg_interns) = fn_resolved_ty.kind.as_fn_mut().unwrap();
+
+                let mut ret_ty = self.transform_interned_ty_faithfully(*ret_intern);
+                let mut arg_tys = Vec::new();
+
+                let i32_type = self.context.i32_type();
+                let ptr_type = self.context.ptr_type();
+
+                for arg_intern in arg_interns {
+                    let arg_ty = self.transform_interned_ty_impl(
+                        *arg_intern,
+                        ty::TransformTypeConfig::FirstClass,
+                    );
+                    if let Some(s) = arg_ty.as_struct()
+                        && let Some(name) = s.get_name()
+                        && name == "fat_ptr"
+                    {
+                        arg_tys.push(ptr_type.clone().into());
+                        arg_tys.push(i32_type.clone().into());
+                    } else {
+                        arg_tys.push(arg_ty);
+                    }
+                }
+
+                let mut aggregate_type = None;
+                if ret_ty.is_zero_length_type() {
+                    ret_ty = self.context.void_type().into();
+                } else if ret_ty.is_aggregate_type() {
+                    arg_tys.insert(0, self.context.ptr_type().into());
+                    aggregate_type = Some(ret_ty);
+                    ret_ty = self.context.void_type().into();
+                }
+
+                let fn_ty = self.context.function_type(ret_ty.clone(), arg_tys);
+                let func = self
+                    .core_module
+                    .borrow_mut()
+                    .define_function_value(full_name.to_string(), fn_ty.clone());
+                {
+                    let mut module = self.core_module.borrow_mut();
+                    module.append_signature_args(func);
+                    if let Some(aggregate_type) = aggregate_type {
+                        module.set_sret(func, aggregate_type);
+                    }
+                }
+                let func_value = self
+                    .core_module
+                    .borrow()
+                    .get_function_value(func)
+                    .expect("function should have a value global");
+
+                CoreValueContainer {
+                    value: ValueId::Global(func_value),
+                    kind: crate::irgen::value::CoreContainerKind::Ptr(fn_ty.into()),
+                }
+            }
+            _ => impossible!(),
+        }
+    }
+
     fn create_constant_initialization(
         &mut self,
         value: &crate::semantics::value::ConstantValue<'_>,
@@ -294,6 +391,46 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         init
     }
 
+    fn create_constant_initialization_core(
+        &mut self,
+        value: &crate::semantics::value::ConstantValue<'_>,
+        intern: crate::semantics::resolved_ty::TypeIntern,
+    ) -> crate::ir::core::ConstId {
+        let probe = self.analyzer.probe_type(intern).unwrap();
+        use crate::semantics::value::ConstantValue::*;
+        match value {
+            ConstantInt(i) => {
+                use crate::semantics::resolved_ty::BuiltInTyKind::*;
+
+                match probe.kind {
+                    ResolvedTyKind::BuiltIn(builtin) => match builtin {
+                        Bool => self.core_module.borrow_mut().add_i1_const(*i != 0),
+                        Char => self.core_module.borrow_mut().add_int_const(8, *i as i64),
+                        I32 | ISize | U32 | USize => self.core_module.borrow_mut().add_i32_const(*i),
+                        Str => impossible!(),
+                    },
+                    ResolvedTyKind::Enum => self.core_module.borrow_mut().add_i32_const(*i),
+                    _ => impossible!(),
+                }
+            }
+            ConstantString(string) => self.core_module.borrow_mut().add_string_const(string.clone()),
+            ConstantArray(inners) => {
+                let inner_ty = probe.kind.as_array().unwrap().0;
+                let values = inners
+                    .iter()
+                    .map(|x| self.create_constant_initialization_core(x, *inner_ty))
+                    .collect();
+                let ty = self.transform_interned_ty_faithfully(intern);
+                self.core_module.borrow_mut().add_array_const(ty, values)
+            }
+            Unit | UnitStruct => {
+                let ty = self.transform_interned_ty_faithfully(intern);
+                self.core_module.borrow_mut().add_struct_const(ty, vec![])
+            }
+            UnEval(_) | Placeholder => impossible!(),
+        }
+    }
+
     fn absorb_analyzer_methods(&mut self) {
         for (resolved_ty, impls) in &self.analyzer.impls {
             if resolved_ty.kind.is_trait() {
@@ -306,29 +443,27 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                 continue;
             }
             for (s, PlaceValue { value, .. }) in &impls.inherent.values {
-                let v =
-                    self.absorb_analyzer_global_value(value, false, name.clone().concat(s.clone()));
-                self.value_indexes.insert(
-                    ValueIndex::Place(PlaceValueIndex {
-                        name: s.clone(),
-                        kind: crate::semantics::value::ValueIndexKind::Impl {
-                            ty: resolved_ty.clone(),
-                            for_trait: None,
-                        },
-                    }),
-                    v,
-                );
+                let full_name = name.clone().concat(s.clone());
+                let v = self.absorb_analyzer_global_value(value, false, full_name.clone());
+                let core_v = self.absorb_analyzer_global_value_core(value, false, full_name);
+                let index = ValueIndex::Place(PlaceValueIndex {
+                    name: s.clone(),
+                    kind: crate::semantics::value::ValueIndexKind::Impl {
+                        ty: resolved_ty.clone(),
+                        for_trait: None,
+                    },
+                });
+                self.value_indexes.insert(index.clone(), v);
+                self.core_value_indexes.insert(index, core_v);
             }
             for (trait_ty, impl_info) in &impls.traits {
                 let name = name
                     .clone()
                     .append(trait_ty.names.as_ref().unwrap().0.clone());
                 for (s, PlaceValue { value, .. }) in &impl_info.values {
-                    let v = self.absorb_analyzer_global_value(
-                        value,
-                        false,
-                        name.clone().concat(s.clone()),
-                    );
+                    let full_name = name.clone().concat(s.clone());
+                    let v = self.absorb_analyzer_global_value(value, false, full_name.clone());
+                    let core_v = self.absorb_analyzer_global_value_core(value, false, full_name);
                     let index = ValueIndex::Place(PlaceValueIndex {
                         name: s.clone(),
                         kind: crate::semantics::value::ValueIndexKind::Impl {
@@ -336,7 +471,8 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                             for_trait: Some(trait_ty.clone()),
                         },
                     });
-                    self.value_indexes.insert(index, v);
+                    self.value_indexes.insert(index.clone(), v);
+                    self.core_value_indexes.insert(index, core_v);
                 }
             }
         }
@@ -344,6 +480,10 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
 
     pub fn build_alloca(&self, ty: TypePtr, name: Option<&str>) -> InstructionPtr {
         self.alloca_builder.build_alloca(ty, name)
+    }
+
+    pub fn build_core_alloca(&mut self, ty: TypePtr, name: Option<&str>) -> ValueId {
+        ValueId::Inst(self.core_alloca_builder.build_alloca(ty, name))
     }
 }
 
@@ -498,7 +638,11 @@ fn add_preludes(
         .add_param_attr(0, Attribute::StructReturn(string_type.clone().into()));
 }
 
-fn add_core_preludes(context: &LLVMContext, builder: &mut CursorBuilder) {
+fn add_core_preludes(
+    context: &LLVMContext,
+    builder: &mut CursorBuilder,
+    value_indexes: &mut HashMap<ValueIndex, CoreValueContainer>,
+) {
     let string_type: TypePtr = context.get_named_struct_type("String").unwrap().into();
     let fat_ptr_type: TypePtr = context.get_named_struct_type("fat_ptr").unwrap().into();
 
@@ -509,11 +653,31 @@ fn add_core_preludes(context: &LLVMContext, builder: &mut CursorBuilder) {
     let str_len_fn = builder
         .module()
         .borrow_mut()
-        .create_function_value("str.len".to_string(), str_len_type);
+        .create_function_value("str.len".to_string(), str_len_type.clone());
     let str_len_args = builder.module().borrow_mut().append_signature_args(str_len_fn);
     let str_len_entry = builder.module().borrow().entry_block(str_len_fn).unwrap();
     builder.locate_end(str_len_fn, str_len_entry);
     builder.build_return(Some(ValueId::Arg(str_len_args[1])));
+    value_indexes.insert(
+        ValueIndex::Place(PlaceValueIndex {
+            name: "len".into(),
+            kind: crate::semantics::value::ValueIndexKind::Impl {
+                ty: ResolvedTy {
+                    names: None,
+                    kind: crate::semantics::resolved_ty::ResolvedTyKind::BuiltIn(
+                        crate::semantics::resolved_ty::BuiltInTyKind::Str,
+                    ),
+                },
+                for_trait: None,
+            },
+        }),
+        CoreValueContainer {
+            value: builder
+                .get_function_value(str_len_fn)
+                .expect("prelude function should have a global value"),
+            kind: crate::irgen::value::CoreContainerKind::Ptr(str_len_type.into()),
+        },
+    );
 
     let string_as_str_type = context.function_type(
         context.void_type().into(),
@@ -522,21 +686,52 @@ fn add_core_preludes(context: &LLVMContext, builder: &mut CursorBuilder) {
     let string_as_str_fn = builder
         .module()
         .borrow_mut()
-        .declare_function_value("string_as_str".to_string(), string_as_str_type);
+        .declare_function_value("string_as_str".to_string(), string_as_str_type.clone());
     {
         let module_handle = builder.module();
         let mut module = module_handle.borrow_mut();
         module.append_signature_args(string_as_str_fn);
         module.set_sret(string_as_str_fn, fat_ptr_type);
     }
+    let string_index = crate::semantics::value::ValueIndexKind::Impl {
+        ty: ResolvedTy {
+            names: Some((FullName(vec![Symbol::from("String")]), None)),
+            kind: ResolvedTyKind::Placeholder,
+        },
+        for_trait: None,
+    };
+    value_indexes.insert(
+        ValueIndex::Place(PlaceValueIndex {
+            name: "as_str".into(),
+            kind: string_index.clone(),
+        }),
+        CoreValueContainer {
+            value: builder
+                .get_function_value(string_as_str_fn)
+                .expect("prelude function should have a global value"),
+            kind: crate::irgen::value::CoreContainerKind::Ptr(string_as_str_type.into()),
+        },
+    );
 
     let string_len_type =
         context.function_type(context.i32_type().into(), vec![context.ptr_type().into()]);
     let string_len_fn = builder
         .module()
         .borrow_mut()
-        .declare_function_value("string_len".to_string(), string_len_type);
+        .declare_function_value("string_len".to_string(), string_len_type.clone());
     builder.module().borrow_mut().append_signature_args(string_len_fn);
+    value_indexes.insert(
+        ValueIndex::Place(PlaceValueIndex {
+            name: "len".into(),
+            kind: string_index.clone(),
+        }),
+        CoreValueContainer {
+            value: builder
+                .get_function_value(string_len_fn)
+                .expect("prelude function should have a global value"),
+            kind: crate::irgen::value::CoreContainerKind::Ptr(string_len_type.into()),
+        },
+    );
 
     let i32_to_string_type = context.function_type(
         context.void_type().into(),
@@ -545,13 +740,53 @@ fn add_core_preludes(context: &LLVMContext, builder: &mut CursorBuilder) {
     let to_string_fn = builder
         .module()
         .borrow_mut()
-        .declare_function_value("to_string".to_string(), i32_to_string_type);
+        .declare_function_value("to_string".to_string(), i32_to_string_type.clone());
     {
         let module_handle = builder.module();
         let mut module = module_handle.borrow_mut();
         module.append_signature_args(to_string_fn);
         module.set_sret(to_string_fn, string_type.clone());
     }
+    value_indexes.insert(
+        ValueIndex::Place(PlaceValueIndex {
+            name: "to_string".into(),
+            kind: crate::semantics::value::ValueIndexKind::Impl {
+                ty: ResolvedTy {
+                    names: None,
+                    kind: crate::semantics::resolved_ty::ResolvedTyKind::BuiltIn(
+                        crate::semantics::resolved_ty::BuiltInTyKind::U32,
+                    ),
+                },
+                for_trait: None,
+            },
+        }),
+        CoreValueContainer {
+            value: builder
+                .get_function_value(to_string_fn)
+                .expect("prelude function should have a global value"),
+            kind: crate::irgen::value::CoreContainerKind::Ptr(i32_to_string_type.clone().into()),
+        },
+    );
+    value_indexes.insert(
+        ValueIndex::Place(PlaceValueIndex {
+            name: "to_string".into(),
+            kind: crate::semantics::value::ValueIndexKind::Impl {
+                ty: ResolvedTy {
+                    names: None,
+                    kind: crate::semantics::resolved_ty::ResolvedTyKind::BuiltIn(
+                        crate::semantics::resolved_ty::BuiltInTyKind::USize,
+                    ),
+                },
+                for_trait: None,
+            },
+        }),
+        CoreValueContainer {
+            value: builder
+                .get_function_value(to_string_fn)
+                .expect("prelude function should have a global value"),
+            kind: crate::irgen::value::CoreContainerKind::Ptr(i32_to_string_type.into()),
+        },
+    );
 
     let string_plus_type = context.function_type(
         context.void_type().into(),
@@ -565,11 +800,23 @@ fn add_core_preludes(context: &LLVMContext, builder: &mut CursorBuilder) {
     let string_plus_fn = builder
         .module()
         .borrow_mut()
-        .declare_function_value("string_plus".to_string(), string_plus_type);
+        .declare_function_value("string_plus".to_string(), string_plus_type.clone());
     {
         let module_handle = builder.module();
         let mut module = module_handle.borrow_mut();
         module.append_signature_args(string_plus_fn);
         module.set_sret(string_plus_fn, string_type);
     }
+    value_indexes.insert(
+        ValueIndex::Place(PlaceValueIndex {
+            name: "string_plus".into(),
+            kind: crate::semantics::value::ValueIndexKind::Global { scope_id: 0 },
+        }),
+        CoreValueContainer {
+            value: builder
+                .get_function_value(string_plus_fn)
+                .expect("prelude function should have a global value"),
+            kind: crate::irgen::value::CoreContainerKind::Ptr(string_plus_type.into()),
+        },
+    );
 }
