@@ -149,13 +149,14 @@ fn run_test_cases_with_reimu(escape_list: &[&str], case_path: &str, stop_at_faul
         let asm = match panic::catch_unwind(AssertUnwindSafe(|| {
             let mut generator = IRGenerator::new(&analyzer, TargetDataLayout::rv32());
             generator.visit(&krate);
+            let module = generator.module();
 
             let mut lowerer = RV32Lowerer::with_options(LowerOptions {
                 lower_function_bodies: true,
                 need_branch_relaxation: true,
             });
             let machine_module = lowerer
-                .lower_module(generator.llvm_module())
+                .lower_module(&module)
                 .expect("MIR lowering failed");
 
             machine_module.to_string()

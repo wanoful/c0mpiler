@@ -29,24 +29,21 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
 
         let ty = self.get_value_type(&right_ptr);
         let value = if matches!(by_ref, ByRef::Yes(_)) {
-            let ptr = self.build_alloca(self.context.ptr_type().into(), Some(&ident.symbol.0));
-            self.builder
-                .build_store(self.get_value_ptr(right_ptr).value_ptr, ptr.clone().into());
+            let ptr = self.build_core_alloca(self.context.ptr_type().into(), Some(&ident.symbol.0));
+            let stored = self.get_value_ptr(right_ptr);
+            self.core_builder.build_store(stored.value_ptr, ptr);
             ValuePtrContainer {
-                value_ptr: ptr.into(),
+                value_ptr: ptr,
                 kind: crate::irgen::value::ContainerKind::Ptr(self.context.ptr_type().into()),
             }
         } else if is_temp_value {
-            if right_ptr.value_ptr.get_name().is_none() {
-                right_ptr.value_ptr.set_name(ident.symbol.0.clone());
-            }
             self.get_value_ptr(right_ptr)
         } else {
-            let ptr = self.build_alloca(ty.clone(), Some(&ident.symbol.0));
-            self.store_to_ptr(ptr.clone().into(), right_ptr);
+            let ptr = self.build_core_alloca(ty.clone(), Some(&ident.symbol.0));
+            self.store_to_ptr(ptr, right_ptr);
 
             ValuePtrContainer {
-                value_ptr: ptr.into(),
+                value_ptr: ptr,
                 kind: crate::irgen::value::ContainerKind::Ptr(ty.clone()),
             }
         };

@@ -1,5 +1,8 @@
 use crate::{
-    ir::ir_value::ValuePtr,
+    ir::{
+        core::{BlockRef, ModuleCore, ValueId},
+        core_inst::InstKind,
+    },
     mir::{
         BlockId, LoweringTarget, MachineFunction, VRegId,
         lower::{FunctionLoweringState, LowerError, Lowerer},
@@ -9,7 +12,7 @@ use crate::{
 #[derive(Debug)]
 pub(super) struct PhiIncoming {
     pred: BlockId,
-    value: ValuePtr,
+    value: ValueId,
 }
 
 #[derive(Debug)]
@@ -23,10 +26,10 @@ impl PhiInfo {
         self.dst
     }
 
-    pub(super) fn filter_pred(&self, pred: BlockId) -> Option<&ValuePtr> {
+    pub(super) fn filter_pred(&self, pred: BlockId) -> Option<ValueId> {
         self.incomings.iter().find_map(|incoming| {
             if incoming.pred == pred {
-                Some(&incoming.value)
+                Some(incoming.value)
             } else {
                 None
             }
@@ -37,37 +40,37 @@ impl PhiInfo {
 impl<T: LoweringTarget> Lowerer<T> {
     pub(super) fn collect_phis(
         &mut self,
+        module: &ModuleCore,
         machine_function: &mut MachineFunction<T>,
         state: &mut FunctionLoweringState,
     ) -> Result<(), LowerError> {
-        for block in state.block_order.clone().iter() {
-            let block_id = state.block_id(block).unwrap();
-            let phi_infos = block
-                .as_basic_block()
-                .instructions
-                .borrow()
-                .iter()
-                .map_while(|ptr| {
-                    let inst = ptr.as_instruction();
-                    if !matches!(inst.kind, crate::ir::ir_value::InstructionKind::Phi) {
-                        return None;
-                    }
-                    let incomings = inst
-                        .operands
-                        .chunks(2)
-                        .map(|chunk| {
-                            let value = &chunk[0];
-                            let succ_block = &chunk[1];
-                            let succ_block_id = state.block_id(succ_block).unwrap();
-                            PhiIncoming {
-                                pred: succ_block_id,
-                                value: value.clone(),
-                            }
-                        })
-                        .collect();
+        for block in state.block_order.clone() {
+            let block_id = state.block_id(&block).unwrap();
+            let phi_infos = module
+                .phis_in_order(block)
+                .into_iter()
+                .map(|phi| {
+                    let inst = module.inst(phi);
+                    let incomings = match &inst.kind {
+                        InstKind::Phi { incomings } => incomings
+                            .iter()
+                            .map(|incoming| {
+                                let pred_block = BlockRef {
+                                    func: block.func,
+                                    block: incoming.block,
+                                };
+                                let pred = state.block_id(&pred_block).unwrap();
+                                PhiIncoming {
+                                    pred,
+                                    value: incoming.value,
+                                }
+                            })
+                            .collect(),
+                        _ => unreachable!("phis_in_order must only return phi instructions"),
+                    };
                     let dst = machine_function.new_vreg();
-                    state.record_vreg(ptr, dst);
-                    Some(PhiInfo { dst, incomings })
+                    state.record_vreg(ValueId::Inst(phi), dst);
+                    PhiInfo { dst, incomings }
                 })
                 .collect();
             state.phi_infos.insert(block_id, phi_infos);
