@@ -56,6 +56,19 @@ impl From<CoreValueContainer> for ValuePtrContainer {
     }
 }
 
+impl From<ValuePtrContainer> for CoreValueContainer {
+    fn from(value: ValuePtrContainer) -> Self {
+        let kind = match value.kind {
+            ContainerKind::Raw { fat } => CoreContainerKind::Raw { fat },
+            ContainerKind::Ptr(ty) => CoreContainerKind::Ptr(ty),
+        };
+        Self {
+            value: value.value_ptr,
+            kind,
+        }
+    }
+}
+
 #[derive(Debug, EnumAsInner, Clone)]
 pub(crate) enum ContainerKind {
     Raw { fat: Option<ValueId> },
