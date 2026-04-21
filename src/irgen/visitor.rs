@@ -201,7 +201,7 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
         self.core_alloca_builder.locate_front(core_fn, core_bb);
 
         let core_args = self.core_module.borrow().args_in_order(core_fn);
-        let core_sret = self.core_module.borrow().func(core_fn).sret.clone();
+        let core_sret = self.core_module.borrow().sret_type(core_fn);
         let (core_ret_arg, core_input_args) = if core_sret.is_some() {
             let (ret, args) = core_args.split_first().unwrap();
             (Some(*ret), args)
@@ -534,7 +534,7 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
             .into_iter()
             .flat_map(|x| self.get_value_presentation(x).flatten())
             .collect();
-        let sret = self.core_module.borrow().func(func).sret.clone();
+        let sret = self.core_module.borrow().sret_type(func);
 
         if let Some(ty) = sret {
             let ptr = self.build_core_alloca(ty.clone(), None);
@@ -619,7 +619,7 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
             .chain(arg_values)
             .flat_map(|x| self.get_value_presentation(x).flatten())
             .collect();
-        let sret = self.core_module.borrow().func(func).sret.clone();
+        let sret = self.core_module.borrow().sret_type(func);
 
         if let Some(ty) = sret {
             let ptr = self.build_core_alloca(ty.clone(), None);

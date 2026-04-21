@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::ir::{
-    attribute::{Attribute, AttributeList},
+    attribute::{Attribute, AttributeSet},
     core::{BlockRef, FunctionId, InstRef, ModuleCore, ValueId},
     core_inst::{BinaryOpcode, ICmpCode, InstKind},
     core_value::ConstKind,
@@ -226,6 +226,10 @@ impl ModuleCore {
         } else {
             "define"
         });
+        if !func_data.attrs.ret.is_empty() {
+            func_data.attrs.ret.ir_print(helper);
+            helper.append(" ");
+        }
         ret_ty.as_ref().ir_print(helper);
         helper.append_white("");
         helper.append(&format!("@{}", func_data.name));
@@ -236,21 +240,23 @@ impl ModuleCore {
             if i > 0 {
                 helper.append(", ");
             }
-            self.arg(*arg).ty.as_ref().ir_print(helper);
+            let arg_data = self.arg(*arg);
+            arg_data.ty.as_ref().ir_print(helper);
             helper.append(" ");
-            if i == 0
-                && let Some(sret_ty) = &func_data.sret
-            {
-                helper.append("sret(");
-                sret_ty.as_ref().ir_print(helper);
-                helper.append(") ");
+            if !arg_data.attrs.is_empty() {
+                arg_data.attrs.ir_print(helper);
+                helper.append(" ");
             }
             let name =
-                helper.intern_core_value_name(ValueId::Arg(*arg), self.arg(*arg).name.clone());
+                helper.intern_core_value_name(ValueId::Arg(*arg), arg_data.name.clone());
             helper.append(&format!("%{}", name));
         }
 
         helper.append(")");
+        if !func_data.attrs.function.is_empty() {
+            helper.append(" ");
+            func_data.attrs.function.ir_print(helper);
+        }
         if func_data.is_declare {
             return;
         }
@@ -686,11 +692,13 @@ fn bytes_escape(input: &str) -> String {
     ret
 }
 
-impl IRPrint for AttributeList {
+impl IRPrint for AttributeSet {
     fn ir_print(&self, helper: &mut PrintHelper) {
-        for x in self.defined.iter().flatten() {
-            x.ir_print(helper);
-            " ".ir_print(helper);
+        for (i, attr) in self.iter().enumerate() {
+            if i > 0 {
+                helper.append(" ");
+            }
+            attr.ir_print(helper);
         }
     }
 }
@@ -704,6 +712,8 @@ impl IRPrint for Attribute {
                 type_ptr.ir_print(helper);
                 helper.append(")");
             }
+            Attribute::NonNull => helper.append("nonnull"),
+            Attribute::Align(align) => helper.append(&format!("align {align}")),
         }
     }
 }

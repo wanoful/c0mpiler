@@ -1,46 +1,78 @@
-use std::iter::repeat_with;
-
-use enum_as_inner::EnumAsInner;
-use strum::{EnumCount, EnumDiscriminants};
-
 use crate::ir::ir_type::TypePtr;
 
-#[derive(Debug, EnumCount, EnumDiscriminants, Clone, EnumAsInner)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AttributeKind {
+    StructReturn,
+    NonNull,
+    Align,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Attribute {
     StructReturn(TypePtr),
+    NonNull,
+    Align(u32),
 }
 
-#[derive(Debug, Default)]
-pub struct AttributeList {
-    pub(crate) defined: [Option<Attribute>; Attribute::COUNT],
-}
-
-impl AttributeList {
-    pub fn set_attr(&mut self, attr: Attribute) {
-        let index = AttributeDiscriminants::from(&attr) as usize;
-        self.defined[index] = Some(attr);
-    }
-
-    pub fn get_attr(&self, attr: AttributeDiscriminants) -> Option<&Attribute> {
-        self.defined[attr as usize].as_ref()
-    }
-}
-
-#[derive(Debug)]
-pub struct FunctionAttribute {
-    pub(crate) fn_attr: AttributeList,
-    pub(crate) ret_attr: AttributeList,
-    pub(crate) params_attr: Vec<AttributeList>,
-}
-
-impl FunctionAttribute {
-    pub fn new(param_num: usize) -> Self {
-        Self {
-            fn_attr: AttributeList::default(),
-            ret_attr: AttributeList::default(),
-            params_attr: repeat_with(AttributeList::default)
-                .take(param_num)
-                .collect(),
+impl Attribute {
+    pub fn kind(&self) -> AttributeKind {
+        match self {
+            Attribute::StructReturn(_) => AttributeKind::StructReturn,
+            Attribute::NonNull => AttributeKind::NonNull,
+            Attribute::Align(_) => AttributeKind::Align,
         }
     }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AttributeSet {
+    defined: Vec<Attribute>,
+}
+
+impl AttributeSet {
+    pub fn insert(&mut self, attr: Attribute) -> Option<Attribute> {
+        let kind = attr.kind();
+        if let Some(slot) = self.defined.iter_mut().find(|defined| defined.kind() == kind) {
+            Some(std::mem::replace(slot, attr))
+        } else {
+            self.defined.push(attr);
+            None
+        }
+    }
+
+    pub fn remove(&mut self, kind: AttributeKind) -> Option<Attribute> {
+        self.defined
+            .iter()
+            .position(|attr| attr.kind() == kind)
+            .map(|index| self.defined.remove(index))
+    }
+
+    pub fn get(&self, kind: AttributeKind) -> Option<&Attribute> {
+        self.defined.iter().find(|attr| attr.kind() == kind)
+    }
+
+    pub fn contains(&self, kind: AttributeKind) -> bool {
+        self.get(kind).is_some()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, Attribute> {
+        self.defined.iter()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.defined.is_empty()
+    }
+
+    pub fn struct_return_ty(&self) -> Option<TypePtr> {
+        match self.get(AttributeKind::StructReturn) {
+            Some(Attribute::StructReturn(ty)) => Some(ty.clone()),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FunctionAttributes {
+    pub function: AttributeSet,
+    pub ret: AttributeSet,
 }

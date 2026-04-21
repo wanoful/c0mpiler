@@ -3,6 +3,7 @@ use std::{collections::HashMap, rc::Rc};
 use slotmap::{SlotMap, new_key_type};
 
 use crate::ir::{
+    attribute::{Attribute, AttributeSet, FunctionAttributes},
     core_inst::{InstKind, OperandSlot, PhiIncoming},
     core_value::{ConstKind, GlobalKind},
     ir_type::{FunctionType, IntType, PtrType, Type},
@@ -57,12 +58,12 @@ pub struct ModuleCore {
 pub struct FunctionData {
     pub name: String,
     pub ty: FunctionTypePtr,
+    pub attrs: FunctionAttributes,
     pub args: SlotMap<ArgId, ArgData>,
     pub blocks: SlotMap<BlockId, BlockData>,
     pub insts: SlotMap<InstId, InstData>,
     pub block_order: Vec<BlockId>,
     pub entry: BlockId,
-    pub sret: Option<TypePtr>,
     pub is_declare: bool,
 }
 
@@ -85,6 +86,7 @@ pub struct InstData {
 pub struct ArgData {
     pub name: Option<String>,
     pub ty: TypePtr,
+    pub attrs: AttributeSet,
     pub parent: FunctionId,
     pub uses: Vec<Use>,
 }
@@ -299,12 +301,12 @@ impl ModuleCore {
         self.functions.insert_with_key(|_| FunctionData {
             name,
             ty,
+            attrs: FunctionAttributes::default(),
             args: SlotMap::with_key(),
             blocks: SlotMap::with_key(),
             insts: SlotMap::with_key(),
             block_order: Vec::new(),
             entry: BlockId::default(),
-            sret: None,
             is_declare: false,
         })
     }
@@ -320,12 +322,12 @@ impl ModuleCore {
         self.functions.insert_with_key(|_| FunctionData {
             name,
             ty,
+            attrs: FunctionAttributes::default(),
             args: SlotMap::with_key(),
             blocks: SlotMap::with_key(),
             insts: SlotMap::with_key(),
             block_order: Vec::new(),
             entry: BlockId::default(),
-            sret: None,
             is_declare: true,
         })
     }
@@ -339,6 +341,7 @@ impl ModuleCore {
         let arg = self.func_mut(func).args.insert(ArgData {
             name,
             ty,
+            attrs: AttributeSet::default(),
             parent: func,
             uses: Vec::new(),
         });
@@ -357,8 +360,44 @@ impl ModuleCore {
             .collect()
     }
 
-    pub(crate) fn set_sret(&mut self, func: FunctionId, ty: TypePtr) {
-        self.func_mut(func).sret = Some(ty);
+    pub fn function_attrs(&self, func: FunctionId) -> &AttributeSet {
+        &self.func(func).attrs.function
+    }
+
+    pub fn return_attrs(&self, func: FunctionId) -> &AttributeSet {
+        &self.func(func).attrs.ret
+    }
+
+    pub fn arg_attrs(&self, arg: ArgRef) -> &AttributeSet {
+        &self.arg(arg).attrs
+    }
+
+    pub fn add_fn_attr(&mut self, func: FunctionId, attr: Attribute) -> Option<Attribute> {
+        self.func_mut(func).attrs.function.insert(attr)
+    }
+
+    pub fn add_ret_attr(&mut self, func: FunctionId, attr: Attribute) -> Option<Attribute> {
+        self.func_mut(func).attrs.ret.insert(attr)
+    }
+
+    pub fn add_arg_attr(&mut self, arg: ArgRef, attr: Attribute) -> Option<Attribute> {
+        self.arg_mut(arg).attrs.insert(attr)
+    }
+
+    pub fn first_arg(&self, func: FunctionId) -> Option<ArgRef> {
+        self.func(func).args.keys().next().map(|arg| ArgRef { func, arg })
+    }
+
+    pub fn sret_type(&self, func: FunctionId) -> Option<TypePtr> {
+        self.first_arg(func)
+            .and_then(|arg| self.arg(arg).attrs.struct_return_ty())
+    }
+
+    pub fn set_sret(&mut self, func: FunctionId, ty: TypePtr) {
+        let arg = self
+            .first_arg(func)
+            .expect("sret requires the lowered function signature to have a first argument");
+        self.add_arg_attr(arg, Attribute::StructReturn(ty));
     }
 
     pub(crate) fn add_global(&mut self, name: String, ty: TypePtr, kind: GlobalKind) -> GlobalId {
