@@ -18,40 +18,62 @@ pub(super) struct DominatorTree {
 }
 
 impl ControlFlowGraph {
-    fn build_dfn(&self) -> (Vec<BlockId>, HashMap<BlockId, usize>) {
+    fn build_dfn(
+        &self,
+    ) -> (
+        Vec<BlockId>,
+        HashMap<BlockId, usize>,
+        HashMap<BlockId, BlockId>,
+    ) {
         let mut visited = HashSet::new();
         let mut order = Vec::new();
+        let mut parent = HashMap::new();
 
         fn dfs_visit(
             cfg: &ControlFlowGraph,
             visited: &mut HashSet<BlockId>,
             order: &mut Vec<BlockId>,
+            parent: &mut HashMap<BlockId, BlockId>,
             block: BlockId,
+            from: Option<BlockId>,
         ) {
             if visited.contains(&block) {
                 return;
             }
+            if let Some(p) = from {
+                parent.insert(block, p);
+            }
             order.push(block);
             visited.insert(block);
             for succ in cfg.succs.get(&block).unwrap_or(&HashSet::new()) {
-                dfs_visit(cfg, visited, order, *succ);
+                dfs_visit(cfg, visited, order, parent, *succ, Some(block));
             }
         }
 
-        dfs_visit(self, &mut visited, &mut order, self.entry);
+        dfs_visit(
+            self,
+            &mut visited,
+            &mut order,
+            &mut parent,
+            self.entry,
+            None,
+        );
         let dfn: HashMap<BlockId, usize> = order
             .iter()
             .enumerate()
             .map(|(i, block)| (*block, i))
             .collect();
 
-        assert!(dfn.len() == self.succs.len(), "CFG is not fully connected");
-
-        (order, dfn)
+        (order, dfn, parent)
     }
 
     pub(super) fn build_dom_tree(&self) -> DominatorTree {
-        let (dfs_order, dfn) = self.build_dfn();
+        let (dfs_order, dfn, dfs_parent) = self.build_dfn();
+        assert!(
+            !dfs_order.is_empty(),
+            "CFG entry is unreachable from itself"
+        );
+
         let mut sdom = dfs_order
             .iter()
             .map(|&block| (block, block))
@@ -86,19 +108,26 @@ impl ControlFlowGraph {
             disjoint_set.insert(child, parent);
         }
 
-        for node in dfs_order.iter().rev() {
-            for pred in self.preds[node].iter() {
+        for &node in dfs_order.iter().rev() {
+            if node == self.entry {
+                continue;
+            }
+
+            for pred in self.preds[&node].iter() {
+                if !dfn.contains_key(pred) {
+                    continue;
+                }
                 let candidate = find(*pred, &mut disjoint_set, &dfn, &sdom, &mut best);
 
                 if dfn[&sdom[&candidate]] < dfn[&sdom[&node]] {
-                    sdom.insert(*node, candidate);
+                    sdom.insert(node, candidate);
                 }
             }
 
-            bucket.entry(sdom[node]).or_default().insert(*node);
+            bucket.entry(sdom[&node]).or_default().insert(node);
 
-            let parent = disjoint_set[node];
-            link(parent, *node, &mut disjoint_set);
+            let parent = dfs_parent[&node];
+            link(parent, node, &mut disjoint_set);
 
             for v in bucket.entry(parent).or_default().iter() {
                 let w = find(*v, &mut disjoint_set, &dfn, &sdom, &mut best);
@@ -117,12 +146,13 @@ impl ControlFlowGraph {
             }
         }
 
-        *idom.get_mut(&self.entry).unwrap() = self.entry;
+        idom.insert(self.entry, self.entry);
 
-        let mut children: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
+        let mut children: HashMap<BlockId, HashSet<BlockId>> =
+            idom.keys().map(|&block| (block, HashSet::new())).collect();
         for (&node, &idom_node) in &idom {
             if node != idom_node {
-                children.entry(idom_node).or_default().insert(node);
+                children.get_mut(&idom_node).unwrap().insert(node);
             }
         }
 
@@ -133,16 +163,25 @@ impl ControlFlowGraph {
         }
     }
 
-    pub(super) fn build_dom_frontier(&self, dom_tree: &DominatorTree) -> HashMap<BlockId, HashSet<BlockId>> {
+    pub(super) fn build_dom_frontier(
+        &self,
+        dom_tree: &DominatorTree,
+    ) -> HashMap<BlockId, HashSet<BlockId>> {
         let mut frontier: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
 
-        for block in self.succs.keys() {
+        for block in dom_tree.idom.keys() {
             if self.preds[block].len() >= 2 {
                 for pred in &self.preds[block] {
+                    if !dom_tree.idom.contains_key(pred) {
+                        continue;
+                    }
                     let mut runner = *pred;
                     while runner != dom_tree.idom[block] {
                         frontier.entry(runner).or_default().insert(*block);
-                        runner = dom_tree.idom[&runner];
+                        let Some(next) = dom_tree.idom.get(&runner) else {
+                            break;
+                        };
+                        runner = *next;
                     }
                 }
             }
@@ -170,7 +209,7 @@ impl ModuleCore {
                     super::core_inst::InstKind::Branch { then_block, cond } => {
                         succs.entry(block_id).or_default().insert(then_block);
                         preds.entry(then_block).or_default().insert(block_id);
-                        if let Some(CondBranch { cond, else_block }) = cond {
+                        if let Some(CondBranch { else_block, .. }) = cond {
                             succs.entry(block_id).or_default().insert(else_block);
                             preds.entry(else_block).or_default().insert(block_id);
                         }
