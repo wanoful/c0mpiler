@@ -137,7 +137,7 @@ impl<T: LoweringTarget> Lowerer<T> {
     pub(crate) fn register_allocation(&self, machine_function: &mut MachineFunction<T>) {
         let (mut spill, mut assigned_regs) = self.compute_spill(machine_function);
         while !spill.is_empty() {
-            self.spill_vreg(*spill.first().unwrap(), machine_function);
+            self.spill_vreg(spill, machine_function);
             (spill, assigned_regs) = self.compute_spill(machine_function);
         }
 
@@ -173,45 +173,64 @@ impl<T: LoweringTarget> Lowerer<T> {
         machine_function.frame_info.need_save_ra = need_save_ra;
     }
 
-    fn spill_vreg(&self, vreg_id: VRegId, machine_function: &mut MachineFunction<T>) {
-        let slot =
-            machine_function.new_stack_slot(T::WORD_SIZE, T::WORD_SIZE, StackSlotKind::Spill);
+    fn spill_vreg(&self, vreg_ids: Vec<VRegId>, machine_function: &mut MachineFunction<T>) {
+        let slots = vreg_ids
+            .iter()
+            .map(|vreg_id| {
+                (
+                    *vreg_id,
+                    machine_function.new_stack_slot(
+                        T::WORD_SIZE,
+                        T::WORD_SIZE,
+                        StackSlotKind::Spill,
+                    ),
+                )
+            })
+            .collect::<HashMap<_, _>>();
 
         for block_index in 0..machine_function.blocks.len() {
             let old_insts = std::mem::take(&mut machine_function.blocks[block_index].instructions);
             let mut new_insts = Vec::new();
 
             for inst in old_insts.iter() {
-                let uses_spilled = inst.use_regs().iter().any(|r| match r {
-                    Register::Virtual(v) => *v == vreg_id,
-                    Register::Physical(_) => false,
-                });
-                let defs_spilled = inst.def_regs().iter().any(|r| match r {
-                    Register::Virtual(v) => *v == vreg_id,
-                    Register::Physical(_) => false,
-                });
+                let uses_spilled = inst
+                    .use_regs()
+                    .iter()
+                    .filter_map(|r| match r {
+                        Register::Virtual(v) => vreg_ids.contains(v).then(|| *v),
+                        Register::Physical(_) => None,
+                    })
+                    .collect::<Vec<_>>();
+                let defs_spilled = inst
+                    .def_regs()
+                    .iter()
+                    .filter_map(|r| match r {
+                        Register::Virtual(v) => vreg_ids.contains(v).then(|| *v),
+                        Register::Physical(_) => None,
+                    })
+                    .collect::<Vec<_>>();
 
                 let mut use_map = HashMap::new();
                 let mut def_map = HashMap::new();
 
-                if uses_spilled {
+                for vreg_id in uses_spilled.iter() {
                     let temp_in = Register::Virtual(machine_function.new_vreg());
-                    new_insts.push(T::emit_load_stack_slot(temp_in, slot));
-                    use_map.insert(vreg_id, temp_in);
+                    new_insts.push(T::emit_load_stack_slot(temp_in, slots[vreg_id]));
+                    use_map.insert(*vreg_id, temp_in);
                 }
 
-                if defs_spilled {
+                for vreg_id in defs_spilled.iter() {
                     let temp_out = Register::Virtual(machine_function.new_vreg());
-                    def_map.insert(vreg_id, temp_out);
+                    def_map.insert(*vreg_id, temp_out);
                 }
 
                 let rewritten = inst.rewrite_vreg(&use_map, &def_map);
                 new_insts.push(rewritten);
 
-                if defs_spilled {
+                for vreg_id in defs_spilled.iter() {
                     let temp_out = def_map[&vreg_id];
                     let rt = Register::Virtual(machine_function.new_vreg());
-                    new_insts.push(T::emit_store_stack_slot(temp_out, slot, rt));
+                    new_insts.push(T::emit_store_stack_slot(temp_out, slots[vreg_id], rt));
                 }
             }
 

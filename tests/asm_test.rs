@@ -98,6 +98,8 @@ fn run_test_cases_with_reimu(escape_list: &[&str], case_path: &str, stop_at_faul
         let src = fs::read_to_string(&src_path).unwrap();
         let should_pass = x.compileexitcode == 0;
 
+        let timer = std::time::Instant::now();
+
         let parser_result = panic::catch_unwind(|| -> Result<Crate, String> {
             let lexer = Lexer::new(&src);
             let buffer = TokenBuffer::new(lexer).map_err(|e| format!("{:?}", e))?;
@@ -168,6 +170,9 @@ fn run_test_cases_with_reimu(escape_list: &[&str], case_path: &str, stop_at_faul
         let asm_file = format!("{temp_target_path}/{name}.s");
         fs::write(&asm_file, &asm).unwrap();
 
+        let compile_time = timer.elapsed();
+        let timer = std::time::Instant::now();
+
         let in_arg = if in_path.exists() {
             format!("-i={}", in_path.display())
         } else {
@@ -208,7 +213,9 @@ fn run_test_cases_with_reimu(escape_list: &[&str], case_path: &str, stop_at_faul
             fault!("{name} reimu execution failed:\nstdout:\n{stdout}\nstderr:\n{stderr}");
         }
 
-        println!("{name} passed!");
+        let running_time = timer.elapsed();
+
+        println!("{name} passed! Compile time: {compile_time:.2?}, Running time: {running_time:.2?}");
         success += 1;
     }
 
