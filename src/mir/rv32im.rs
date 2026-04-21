@@ -20,7 +20,7 @@ impl TargetArch for RV32Arch {
 
     fn get_allocatable_regs() -> Vec<Self::PhysicalReg> {
         use RV32Reg::*;
-        // 删除 T5, T6 以供溢出使用
+        // 删除 T6 以供溢出使用
         vec![
             T0, T1, T2, T3, T4, T5, S0, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, A0, A1, A2,
             A3, A4, A5, A6, A7,
@@ -396,7 +396,23 @@ impl TargetInst for RV32Inst {
     }
 
     fn size_in_bytes(&self) -> usize {
-        4
+        use RV32Inst::*;
+
+        match self {
+            // These remain pseudo-instructions in the printed assembly and are
+            // expanded by the assembler, so branch relaxation must account for
+            // their expanded size instead of assuming a single 4-byte insn.
+            Call { .. } | Tail { .. } | La { .. } => 8,
+            Lbs { .. } | Lhs { .. } | Lws { .. } | Sbs { .. } | Shs { .. } | Sws { .. } => 8,
+            Li { imm, .. } => {
+                if (-2048..=2047).contains(imm) {
+                    4
+                } else {
+                    8
+                }
+            }
+            _ => 4,
+        }
     }
 
     fn get_branch_target(&mut self) -> Option<&mut BlockId> {
