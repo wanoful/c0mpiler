@@ -6,15 +6,18 @@ pub mod value;
 pub mod visitor;
 
 use std::collections::HashMap;
-use std::{cell::{Ref, RefCell}, rc::Rc};
+use std::{
+    cell::{Ref, RefCell},
+    rc::Rc,
+};
 
 use crate::{
     ast::{Crate, NodeId, Symbol},
     impossible,
     ir::{
+        LLVMContext,
         core::{ModuleCore, ValueId},
         core_builder::CursorBuilder,
-        LLVMContext,
         ir_type::TypePtr,
         layout::TargetDataLayout,
     },
@@ -154,8 +157,7 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
             let is_main_function = self.analyzer.is_main_function(s, scope_id);
             let full_name = self.analyzer.get_full_name(scope_id, s.clone());
 
-            let core_v =
-                self.absorb_analyzer_global_value_core(value, is_main_function, full_name);
+            let core_v = self.absorb_analyzer_global_value_core(value, is_main_function, full_name);
             let v: ValuePtrContainer = core_v.clone().into();
             let index = ValueIndex::Place(PlaceValueIndex {
                 name: s.clone(),
@@ -289,14 +291,19 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                     ResolvedTyKind::BuiltIn(builtin) => match builtin {
                         Bool => self.core_module.borrow_mut().add_i1_const(*i != 0),
                         Char => self.core_module.borrow_mut().add_int_const(8, *i as i64),
-                        I32 | ISize | U32 | USize => self.core_module.borrow_mut().add_i32_const(*i),
+                        I32 | ISize | U32 | USize => {
+                            self.core_module.borrow_mut().add_i32_const(*i)
+                        }
                         Str => impossible!(),
                     },
                     ResolvedTyKind::Enum => self.core_module.borrow_mut().add_i32_const(*i),
                     _ => impossible!(),
                 }
             }
-            ConstantString(string) => self.core_module.borrow_mut().add_string_const(string.clone()),
+            ConstantString(string) => self
+                .core_module
+                .borrow_mut()
+                .add_string_const(string.clone()),
             ConstantArray(inners) => {
                 let inner_ty = probe.kind.as_array().unwrap().0;
                 let values = inners
@@ -412,7 +419,10 @@ fn add_core_preludes(
         .module()
         .borrow_mut()
         .create_function_value("str.len".to_string(), str_len_type.clone());
-    let str_len_args = builder.module().borrow_mut().append_signature_args(str_len_fn);
+    let str_len_args = builder
+        .module()
+        .borrow_mut()
+        .append_signature_args(str_len_fn);
     let str_len_entry = builder.module().borrow().entry_block(str_len_fn).unwrap();
     builder.locate_end(str_len_fn, str_len_entry);
     builder.build_return(Some(ValueId::Arg(str_len_args[1])));
@@ -477,7 +487,10 @@ fn add_core_preludes(
         .module()
         .borrow_mut()
         .declare_function_value("string_len".to_string(), string_len_type.clone());
-    builder.module().borrow_mut().append_signature_args(string_len_fn);
+    builder
+        .module()
+        .borrow_mut()
+        .append_signature_args(string_len_fn);
     value_indexes.insert(
         ValueIndex::Place(PlaceValueIndex {
             name: "len".into(),

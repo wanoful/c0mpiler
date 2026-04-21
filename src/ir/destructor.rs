@@ -3,9 +3,7 @@ use std::collections::HashMap;
 use crate::ast::{Symbol, expr::*};
 use crate::ir::core::ValueId;
 use crate::irgen::extra::ExprExtra;
-use crate::irgen::value::{
-    CoreContainerKind, CoreValueContainer, ValuePtrContainer,
-};
+use crate::irgen::value::{CoreContainerKind, CoreValueContainer, ValuePtrContainer};
 use crate::{irgen::IRGenerator, semantics::visitor::Visitor};
 
 impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
@@ -53,7 +51,8 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                     .iter()
                     .enumerate()
                     .map(|(i, expr)| {
-                        let index = ValueId::Const(self.core_module.borrow_mut().add_i32_const(i as u32));
+                        let index =
+                            ValueId::Const(self.core_module.borrow_mut().add_i32_const(i as u32));
                         let v = self.core_builder.build_getelementptr(
                             inner_ty.clone(),
                             right_value.value,
@@ -82,8 +81,11 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                         .zip(inner_tys)
                         .enumerate()
                         .map(|(i, (expr, inner_ty))| {
-                            let zero = ValueId::Const(self.core_module.borrow_mut().add_i32_const(0));
-                            let index = ValueId::Const(self.core_module.borrow_mut().add_i32_const(i as u32));
+                            let zero =
+                                ValueId::Const(self.core_module.borrow_mut().add_i32_const(0));
+                            let index = ValueId::Const(
+                                self.core_module.borrow_mut().add_i32_const(i as u32),
+                            );
                             let v = self.core_builder.build_getelementptr(
                                 struct_type.clone(),
                                 right_value.value,

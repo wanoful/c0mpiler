@@ -14,7 +14,10 @@ use crate::{
     irgen::{
         IRGenerator,
         extra::ExprExtra,
-        value::{ContainerKind, CoreContainerKind, CoreValueContainer, CoreValueKind, ValueKind, ValuePtrContainer},
+        value::{
+            ContainerKind, CoreContainerKind, CoreValueContainer, CoreValueKind, ValueKind,
+            ValuePtrContainer,
+        },
     },
     semantics::{analyzer::SemanticAnalyzer, visitor::Visitor},
 };
@@ -34,7 +37,11 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         if SemanticAnalyzer::is_string_type(&self_probe) {
             let string_ty: TypePtr = self.context.get_named_struct_type("String").unwrap().into();
             let ret = self.build_core_alloca(string_ty.clone(), None);
-            let func = self.core_module.borrow().get_function("string_plus").unwrap();
+            let func = self
+                .core_module
+                .borrow()
+                .get_function("string_plus")
+                .unwrap();
             let args = once(ret)
                 .chain(
                     vec![value1, value2]
@@ -109,7 +116,9 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
             _ => impossible!(),
         };
 
-        let value = self.core_builder.build_binary(op_code, ty, raw1, raw2, None);
+        let value = self
+            .core_builder
+            .build_binary(op_code, ty, raw1, raw2, None);
 
         CoreValueContainer {
             value: ValueId::Inst(value),
@@ -191,18 +200,8 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         let next_bb = self.core_builder.append_block(current_fn, Some(".next"));
 
         match bin_op {
-            BinOp::And => self.try_build_conditional_branch(
-                raw1,
-                right_bb,
-                next_bb,
-                &expr1.id,
-            ),
-            BinOp::Or => self.try_build_conditional_branch(
-                raw1,
-                next_bb,
-                right_bb,
-                &expr1.id,
-            ),
+            BinOp::And => self.try_build_conditional_branch(raw1, right_bb, next_bb, &expr1.id),
+            BinOp::Or => self.try_build_conditional_branch(raw1, next_bb, right_bb, &expr1.id),
             _ => impossible!(),
         };
         self.core_builder.locate_end(current_fn, right_bb);
@@ -274,7 +273,8 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     ) {
         let result = self.analyzer.get_expr_result(expr_id);
         if result.interrupt.is_not() {
-            self.core_builder.build_conditional_branch(cond, iftrue, ifelse);
+            self.core_builder
+                .build_conditional_branch(cond, iftrue, ifelse);
         }
     }
 

@@ -365,7 +365,12 @@ impl CursorBuilder {
     fn memcpy_ty() -> TypePtr {
         Rc::new(Type::Function(FunctionType(
             Self::void_ty(),
-            vec![Self::ptr_ty(), Self::ptr_ty(), Self::i32_ty(), Self::i1_ty()],
+            vec![
+                Self::ptr_ty(),
+                Self::ptr_ty(),
+                Self::i32_ty(),
+                Self::i1_ty(),
+            ],
         )))
     }
 
@@ -454,7 +459,15 @@ impl CursorBuilder {
         indices: Vec<ValueId>,
         name: Option<&str>,
     ) -> InstRef {
-        self.build_inst(Self::ptr_ty(), InstKind::GetElementPtr { base_ty, base, indices }, name)
+        self.build_inst(
+            Self::ptr_ty(),
+            InstKind::GetElementPtr {
+                base_ty,
+                base,
+                indices,
+            },
+            name,
+        )
     }
 
     pub fn build_call(

@@ -1,10 +1,7 @@
 use enum_as_inner::EnumAsInner;
 
 use crate::{
-    ir::{
-        core::ValueId,
-        ir_type::TypePtr,
-    },
+    ir::{core::ValueId, ir_type::TypePtr},
     irgen::IRGenerator,
     semantics::{
         impls::DerefLevel,
@@ -97,7 +94,9 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     pub(crate) fn get_value_type(&self, value: &ValuePtrContainer) -> TypePtr {
         match &value.kind {
             ContainerKind::Raw { fat: Some(..) } => self.fat_ptr_type().into(),
-            ContainerKind::Raw { fat: None } => self.core_module.borrow().value_ty(value.value_ptr).clone(),
+            ContainerKind::Raw { fat: None } => {
+                self.core_module.borrow().value_ty(value.value_ptr).clone()
+            }
             ContainerKind::Ptr(ty) => ty.clone(),
         }
     }
@@ -115,7 +114,7 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                     }
                 }
                 ContainerKind::Ptr(..) => unreachable!(),
-            }
+            },
             ContainerKind::Ptr(ty) => {
                 if ty.is_fat_ptr() {
                     ValuePtrContainer {
@@ -126,8 +125,10 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                         )),
                         kind: ContainerKind::Raw {
                             fat: Some({
-                                let zero = ValueId::Const(self.core_module.borrow_mut().add_i32_const(0));
-                                let one = ValueId::Const(self.core_module.borrow_mut().add_i32_const(1));
+                                let zero =
+                                    ValueId::Const(self.core_module.borrow_mut().add_i32_const(0));
+                                let one =
+                                    ValueId::Const(self.core_module.borrow_mut().add_i32_const(1));
                                 let p = self.core_builder.build_getelementptr(
                                     self.fat_ptr_type().into(),
                                     value.value_ptr,
@@ -216,7 +217,9 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     pub(crate) fn get_raw_value(&mut self, value: ValuePtrContainer) -> ValueId {
         match value.kind {
             ContainerKind::Raw { .. } => value.value_ptr,
-            ContainerKind::Ptr(ty) => ValueId::Inst(self.core_builder.build_load(ty, value.value_ptr, None)),
+            ContainerKind::Ptr(ty) => {
+                ValueId::Inst(self.core_builder.build_load(ty, value.value_ptr, None))
+            }
         }
     }
 
@@ -259,10 +262,7 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
             .unwrap_or_else(|| panic!("Can't get core value by index: {:?}", index))
     }
 
-    pub(crate) fn try_get_core_value_by_index(
-        &self,
-        index: &ValueIndex,
-    ) -> Option<CoreValueKind> {
+    pub(crate) fn try_get_core_value_by_index(&self, index: &ValueIndex) -> Option<CoreValueKind> {
         if let ValueIndex::Place(PlaceValueIndex {
             name,
             kind:
@@ -279,7 +279,10 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         {
             Some(CoreValueKind::LenMethod(len.unwrap()))
         } else {
-            self.core_value_indexes.get(index).cloned().map(CoreValueKind::Normal)
+            self.core_value_indexes
+                .get(index)
+                .cloned()
+                .map(CoreValueKind::Normal)
         }
     }
 
@@ -308,7 +311,9 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     pub(crate) fn core_get_value_type(&self, value: &CoreValueContainer) -> TypePtr {
         match &value.kind {
             CoreContainerKind::Raw { fat: Some(..) } => self.fat_ptr_type().into(),
-            CoreContainerKind::Raw { fat: None } => self.core_module.borrow().value_ty(value.value).clone(),
+            CoreContainerKind::Raw { fat: None } => {
+                self.core_module.borrow().value_ty(value.value).clone()
+            }
             CoreContainerKind::Ptr(ty) => ty.clone(),
         }
     }
@@ -318,26 +323,26 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         value: CoreValueContainer,
     ) -> CoreValueContainer {
         match &value.kind {
-            CoreContainerKind::Raw { .. } => {
-                match value.kind.clone() {
-                    CoreContainerKind::Raw { fat: Some(..) } => value,
-                    CoreContainerKind::Raw { fat: None } => {
-                        let raw_ty = self.core_module.borrow().value_ty(value.value).clone();
-                        if raw_ty.is_aggregate_type() {
-                            self.core_get_value_ptr(value)
-                        } else {
-                            value
-                        }
+            CoreContainerKind::Raw { .. } => match value.kind.clone() {
+                CoreContainerKind::Raw { fat: Some(..) } => value,
+                CoreContainerKind::Raw { fat: None } => {
+                    let raw_ty = self.core_module.borrow().value_ty(value.value).clone();
+                    if raw_ty.is_aggregate_type() {
+                        self.core_get_value_ptr(value)
+                    } else {
+                        value
                     }
-                    CoreContainerKind::Ptr(..) => unreachable!(),
                 }
-            }
+                CoreContainerKind::Ptr(..) => unreachable!(),
+            },
             CoreContainerKind::Ptr(ty) => {
                 if ty.is_fat_ptr() {
                     let value_ptr = value.value;
-                    let head = self
-                        .core_builder
-                        .build_load(self.context.ptr_type().into(), value_ptr, None);
+                    let head = self.core_builder.build_load(
+                        self.context.ptr_type().into(),
+                        value_ptr,
+                        None,
+                    );
                     let zero = ValueId::Const(self.core_module.borrow_mut().add_i32_const(0));
                     let one = ValueId::Const(self.core_module.borrow_mut().add_i32_const(1));
                     let second_ptr = self.core_builder.build_getelementptr(
@@ -346,9 +351,11 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                         vec![zero, one],
                         None,
                     );
-                    let fat = self
-                        .core_builder
-                        .build_load(self.context.i32_type().into(), ValueId::Inst(second_ptr), None);
+                    let fat = self.core_builder.build_load(
+                        self.context.i32_type().into(),
+                        ValueId::Inst(second_ptr),
+                        None,
+                    );
                     CoreValueContainer {
                         value: ValueId::Inst(head),
                         kind: CoreContainerKind::Raw {
@@ -488,7 +495,9 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                         kind: ContainerKind::Ptr(ty.clone()),
                     }
                 } else {
-                    let new_value = self.core_builder.build_load(self.context.ptr_type().into(), value, None);
+                    let new_value =
+                        self.core_builder
+                            .build_load(self.context.ptr_type().into(), value, None);
                     self.deref(
                         ValuePtrContainer {
                             value_ptr: ValueId::Inst(new_value),

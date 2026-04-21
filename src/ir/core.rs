@@ -5,8 +5,8 @@ use slotmap::{SlotMap, new_key_type};
 use crate::ir::{
     core_inst::{InstKind, OperandSlot, PhiIncoming},
     core_value::{ConstKind, GlobalKind},
-    ir_type::{FunctionTypePtr, TypePtr},
     ir_type::{FunctionType, IntType, PtrType, Type},
+    ir_type::{FunctionTypePtr, TypePtr},
     layout::{TargetDataLayout, TypeLayoutEngine},
 };
 
@@ -112,6 +112,12 @@ pub enum InstPosition {
     Phi(usize),
     Inst(usize),
     Terminator,
+}
+
+impl Default for ModuleCore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ModuleCore {
@@ -355,12 +361,7 @@ impl ModuleCore {
         self.func_mut(func).sret = Some(ty);
     }
 
-    pub(crate) fn add_global(
-        &mut self,
-        name: String,
-        ty: TypePtr,
-        kind: GlobalKind,
-    ) -> GlobalId {
+    pub(crate) fn add_global(&mut self, name: String, ty: TypePtr, kind: GlobalKind) -> GlobalId {
         let global = self.globals.insert(GlobalData {
             name,
             ty,
@@ -826,9 +827,10 @@ impl ModuleCore {
                     !(u.user == phi && u.slot == OperandSlot::PhiIncomingVal(incoming_index))
                 });
 
-                for i in incoming_index..cloned.len() {
-                    let id = cloned[i].value;
-                    self.value_uses_mut(id)
+                for (i, PhiIncoming { value: id, .. }) in
+                    cloned.iter().enumerate().skip(incoming_index)
+                {
+                    self.value_uses_mut(*id)
                         .iter_mut()
                         .find(|u| u.user == phi && u.slot == OperandSlot::PhiIncomingVal(i + 1))
                         .unwrap()
@@ -884,5 +886,4 @@ impl ModuleCore {
             _ => {}
         }
     }
-
 }

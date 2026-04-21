@@ -3,17 +3,13 @@ use std::iter::{once, zip};
 use crate::{
     ast::{BindingMode, Crate, Mutability, expr::*, item::*, pat::*, stmt::*},
     impossible,
-    ir::{
-        core::{BlockRef, ValueId},
-        ir_type::{ArrayType, TypePtr},
-    },
+    ir::{core::ValueId, ir_type::ArrayType},
     irgen::{
         IRGenerator,
         extra::{CoreCycleInfo, ExprExtra, ItemExtra, PatExtra},
         ty::TransformTypeConfig,
         value::{
-            ContainerKind, CoreContainerKind, CoreValueContainer, CoreValueKind, ValueKind,
-            ValuePtrContainer,
+            ContainerKind, CoreContainerKind, CoreValueContainer, ValueKind, ValuePtrContainer,
         },
     },
     semantics::{
@@ -40,26 +36,29 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     }
 
     pub(crate) fn core_branch_value(&self, expr: &'ast Expr) -> Option<CoreValueContainer> {
-        self.get_core_expr_value(&expr.id).or_else(|| match &expr.kind {
-            ExprKind::Block(BlockExpr { stmts, .. }) => stmts.iter().rev().find_map(|stmt| {
+        self.get_core_expr_value(&expr.id)
+            .or_else(|| match &expr.kind {
+                ExprKind::Block(BlockExpr { stmts, .. }) => stmts.iter().rev().find_map(|stmt| {
+                    if let StmtKind::Expr(inner) = &stmt.kind {
+                        self.get_core_expr_value(&inner.id)
+                    } else {
+                        None
+                    }
+                }),
+                _ => None,
+            })
+    }
+
+    pub(crate) fn core_block_value(&self, block: &'ast BlockExpr) -> Option<CoreValueContainer> {
+        self.get_core_expr_value(&block.id).or_else(|| {
+            block.stmts.iter().rev().find_map(|stmt| {
                 if let StmtKind::Expr(inner) = &stmt.kind {
                     self.get_core_expr_value(&inner.id)
                 } else {
                     None
                 }
-            }),
-            _ => None,
+            })
         })
-    }
-
-    pub(crate) fn core_block_value(&self, block: &'ast BlockExpr) -> Option<CoreValueContainer> {
-        self.get_core_expr_value(&block.id).or_else(|| block.stmts.iter().rev().find_map(|stmt| {
-            if let StmtKind::Expr(inner) = &stmt.kind {
-                self.get_core_expr_value(&inner.id)
-            } else {
-                None
-            }
-        }))
     }
 }
 
@@ -477,12 +476,9 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
         for (i, expr) in exprs.iter().enumerate() {
             let v = self.visit_expr(expr, extra)?;
             let index = ValueId::Const(self.core_module.borrow_mut().add_i32_const(i as u32));
-            let ith = self.core_builder.build_getelementptr(
-                inner_ty.clone(),
-                value,
-                vec![index],
-                None,
-            );
+            let ith =
+                self.core_builder
+                    .build_getelementptr(inner_ty.clone(), value, vec![index], None);
             self.store_to_ptr(ValueId::Inst(ith), v);
         }
 
@@ -603,7 +599,8 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
         let derefed_value = self.deref_impl(receiver_value, level, &receiver_ty, self_by_ref);
 
         let query_result = self.get_value_by_index(&ValueIndex::Place(remove_self_index.clone()));
-        let core_query_result = self.try_get_core_value_by_index(&ValueIndex::Place(remove_self_index));
+        let core_query_result =
+            self.try_get_core_value_by_index(&ValueIndex::Place(remove_self_index));
 
         let ValueKind::Normal(fn_value) = query_result else {
             if let Some(core_query_result) = core_query_result {
@@ -666,7 +663,8 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
                 for (i, expr) in exprs.iter().enumerate() {
                     let expr_value = self.visit_expr(expr, extra)?;
                     let zero = ValueId::Const(self.core_module.borrow_mut().add_i32_const(0));
-                    let index = ValueId::Const(self.core_module.borrow_mut().add_i32_const(i as u32));
+                    let index =
+                        ValueId::Const(self.core_module.borrow_mut().add_i32_const(i as u32));
                     let gep = self.core_builder.build_getelementptr(
                         ty.clone(),
                         p,
@@ -724,7 +722,7 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
         let expr_value = self.visit_expr(expr, extra)?;
         let raw = self.get_raw_value(expr_value);
 
-        let value = match un_op {
+        match un_op {
             UnOp::Deref => {
                 // 此时 expr_value 的 raw 必定为指针类型
                 let ty = self
@@ -733,8 +731,8 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
                     value_ptr: raw,
                     kind: ContainerKind::Ptr(ty),
                 };
-                let ty =
-                    self.transform_interned_ty_faithfully(self.analyzer.get_expr_type(&extra.self_id));
+                let ty = self
+                    .transform_interned_ty_faithfully(self.analyzer.get_expr_type(&extra.self_id));
                 self.set_core_expr_value(
                     extra.self_id,
                     CoreValueContainer {
@@ -772,9 +770,7 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
                     kind: ContainerKind::Raw { fat: None },
                 })
             }
-        };
-
-        value
+        }
     }
 
     fn visit_lit_expr<'tmp>(
@@ -817,7 +813,10 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
             },
             LitKind::Str | LitKind::StrRaw(_) => {
                 let string = constant.as_constant_string().unwrap();
-                let constant = self.core_module.borrow_mut().add_string_const(string.clone());
+                let constant = self
+                    .core_module
+                    .borrow_mut()
+                    .add_string_const(string.clone());
                 let ty = self.core_module.borrow().const_data(constant).ty.clone();
                 let global = self.core_module.borrow_mut().add_global(
                     format!(".{}.str", extra.self_id),
@@ -853,7 +852,13 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
         let expr_raw = self.get_raw_value(expr_value);
         let ty = self.transform_interned_ty_faithfully(self.analyzer.get_expr_type(&extra.self_id));
 
-        let src_bits = self.core_module.borrow().value_ty(expr_raw).as_int().unwrap().0;
+        let src_bits = self
+            .core_module
+            .borrow()
+            .value_ty(expr_raw)
+            .as_int()
+            .unwrap()
+            .0;
         let target_bits = ty.as_int().unwrap().0;
         let value = if src_bits < target_bits {
             ValueId::Inst(self.core_builder.build_zext(expr_raw, ty.clone(), None))
@@ -893,7 +898,9 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
         let cond_raw = self.get_raw_value(cond_value);
         let current_function = self.core_builder.get_current_function();
         let current_bb = self.core_builder.get_current_basic_block();
-        let take_bb = self.core_builder.append_block(current_function, Some(".take"));
+        let take_bb = self
+            .core_builder
+            .append_block(current_function, Some(".take"));
 
         self.core_builder.locate_end(current_function, take_bb);
         let take_value = self
@@ -909,8 +916,12 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
         let new_take_bb = self.core_builder.get_current_basic_block();
 
         if let Some(else_expr) = else_expr {
-            let else_bb = self.core_builder.append_block(current_function, Some(".else"));
-            let next_bb = self.core_builder.append_block(current_function, Some(".next"));
+            let else_bb = self
+                .core_builder
+                .append_block(current_function, Some(".else"));
+            let next_bb = self
+                .core_builder
+                .append_block(current_function, Some(".next"));
             self.try_build_branch(next_bb, &body.id);
             self.core_builder.locate_end(current_function, current_bb);
             self.try_build_conditional_branch(cond_raw, take_bb, else_bb, &cond.id);
@@ -937,9 +948,11 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
                 }
                 (None, Some(else_value)) => {
                     let ty = self.get_value_type(&else_value);
-                    let v =
-                        self.core_builder
-                            .build_phi(ty, vec![(else_value.value_ptr, new_else_bb)], None);
+                    let v = self.core_builder.build_phi(
+                        ty,
+                        vec![(else_value.value_ptr, new_else_bb)],
+                        None,
+                    );
                     let value = ValuePtrContainer {
                         value_ptr: ValueId::Inst(v),
                         kind: else_value.kind,
@@ -958,9 +971,11 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
                 }
                 (Some(take_value), None) => {
                     let ty = self.get_value_type(&take_value);
-                    let v =
-                        self.core_builder
-                            .build_phi(ty, vec![(take_value.value_ptr, new_take_bb)], None);
+                    let v = self.core_builder.build_phi(
+                        ty,
+                        vec![(take_value.value_ptr, new_take_bb)],
+                        None,
+                    );
                     let value = ValuePtrContainer {
                         value_ptr: ValueId::Inst(v),
                         kind: take_value.kind,
@@ -1003,7 +1018,9 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
                 }
             }
         } else {
-            let next_bb = self.core_builder.append_block(current_function, Some(".next"));
+            let next_bb = self
+                .core_builder
+                .append_block(current_function, Some(".next"));
             self.try_build_branch(next_bb, &body.id);
             self.core_builder.locate_end(current_function, current_bb);
             self.try_build_conditional_branch(cond_raw, take_bb, next_bb, &cond.id);
@@ -1019,9 +1036,15 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
         extra: Self::ExprExtra<'tmp>,
     ) -> Self::ExprRes<'_> {
         let current_function = self.core_builder.get_current_function();
-        let cond_bb = self.core_builder.append_block(current_function, Some(".cond"));
-        let body_bb = self.core_builder.append_block(current_function, Some(".body"));
-        let next_bb = self.core_builder.append_block(current_function, Some(".next"));
+        let cond_bb = self
+            .core_builder
+            .append_block(current_function, Some(".cond"));
+        let body_bb = self
+            .core_builder
+            .append_block(current_function, Some(".body"));
+        let next_bb = self
+            .core_builder
+            .append_block(current_function, Some(".next"));
 
         self.core_builder.build_branch(cond_bb);
         self.core_builder.locate_end(current_function, cond_bb);
@@ -1064,8 +1087,12 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
         extra: Self::ExprExtra<'tmp>,
     ) -> Self::ExprRes<'_> {
         let current_function = self.core_builder.get_current_function();
-        let loop_bb = self.core_builder.append_block(current_function, Some(".loop"));
-        let next_bb = self.core_builder.append_block(current_function, Some(".next"));
+        let loop_bb = self
+            .core_builder
+            .append_block(current_function, Some(".loop"));
+        let next_bb = self
+            .core_builder
+            .append_block(current_function, Some(".next"));
 
         let ty = self.transform_interned_ty_impl(
             self.analyzer.get_expr_type(&extra.self_id),
@@ -1118,10 +1145,7 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
                     },
                 );
 
-                Some(ValuePtrContainer {
-                    value_ptr,
-                    kind,
-                })
+                Some(ValuePtrContainer { value_ptr, kind })
             }
             None => {
                 if !self
@@ -1378,7 +1402,9 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
             None
         };
         let core_cycle_info = extra.core_cycle_info.unwrap();
-        if let Some(v) = v && let Some(dest) = core_cycle_info.value {
+        if let Some(v) = v
+            && let Some(dest) = core_cycle_info.value
+        {
             self.store_to_ptr(dest, v);
         }
 
@@ -1431,12 +1457,9 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
             let v = self.visit_expr(expr, extra)?;
             let zero = ValueId::Const(self.core_module.borrow_mut().add_i32_const(0));
             let index = ValueId::Const(self.core_module.borrow_mut().add_i32_const(*index as u32));
-            let ith = self.core_builder.build_getelementptr(
-                ty.clone(),
-                value,
-                vec![zero, index],
-                None,
-            );
+            let ith =
+                self.core_builder
+                    .build_getelementptr(ty.clone(), value, vec![zero, index], None);
             self.store_to_ptr(ValueId::Inst(ith), v);
         }
         self.set_core_expr_value(
@@ -1483,11 +1506,9 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
 
         self.core_builder
             .locate_end(current_function, repeat_loop_header_bb);
-        let repeat_counter_v = self.core_builder.build_load(
-            self.context.i32_type().into(),
-            repeat_counter,
-            None,
-        );
+        let repeat_counter_v =
+            self.core_builder
+                .build_load(self.context.i32_type().into(), repeat_counter, None);
         let repeat_num = ValueId::Const(self.core_module.borrow_mut().add_i32_const(repeat_num));
         let cond = self.core_builder.build_icmp(
             crate::ir::core_inst::ICmpCode::Eq,

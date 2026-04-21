@@ -4,10 +4,10 @@ use std::{
 };
 
 use crate::ir::{
+    attribute::{Attribute, AttributeList},
     core::{BlockRef, FunctionId, InstRef, ModuleCore, ValueId},
     core_inst::{BinaryOpcode, ICmpCode, InstKind},
     core_value::ConstKind,
-    attribute::{Attribute, AttributeList},
     ir_type::{Type, TypePtr},
     layout::TargetDataLayout,
 };
@@ -221,7 +221,11 @@ impl ModuleCore {
         let func_ty = &func_data.ty;
         let ret_ty = func_ty.0.as_function().unwrap().0.clone();
 
-        helper.append_white(if func_data.is_declare { "declare" } else { "define" });
+        helper.append_white(if func_data.is_declare {
+            "declare"
+        } else {
+            "define"
+        });
         ret_ty.as_ref().ir_print(helper);
         helper.append_white("");
         helper.append(&format!("@{}", func_data.name));
@@ -234,12 +238,15 @@ impl ModuleCore {
             }
             self.arg(*arg).ty.as_ref().ir_print(helper);
             helper.append(" ");
-            if i == 0 && let Some(sret_ty) = &func_data.sret {
+            if i == 0
+                && let Some(sret_ty) = &func_data.sret
+            {
                 helper.append("sret(");
                 sret_ty.as_ref().ir_print(helper);
                 helper.append(") ");
             }
-            let name = helper.intern_core_value_name(ValueId::Arg(*arg), self.arg(*arg).name.clone());
+            let name =
+                helper.intern_core_value_name(ValueId::Arg(*arg), self.arg(*arg).name.clone());
             helper.append(&format!("%{}", name));
         }
 

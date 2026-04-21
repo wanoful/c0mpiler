@@ -1,10 +1,6 @@
 use crate::{
     ast::{BindingMode, ByRef},
-    irgen::{
-        IRGenerator,
-        extra::PatExtra,
-        value::ValuePtrContainer,
-    },
+    irgen::{IRGenerator, extra::PatExtra, value::ValuePtrContainer},
     semantics::value::{PlaceValueIndex, ValueIndex, ValueIndexKind},
 };
 

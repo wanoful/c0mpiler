@@ -595,9 +595,11 @@ impl<T: LoweringTarget> Lowerer<T> {
     ) -> Result<Box<MachineFunction<T>>, LowerError> {
         let function_name = module.func(function).name.clone();
         let blocks = module.blocks_in_order(function);
-        let entry = module.entry_block(function).ok_or_else(|| LowerError::MissingEntryBlock {
-            function: function_name.clone(),
-        })?;
+        let entry = module
+            .entry_block(function)
+            .ok_or_else(|| LowerError::MissingEntryBlock {
+                function: function_name.clone(),
+            })?;
 
         let mut state = FunctionLoweringState::new(function_name.clone());
         let mut machine_function = empty_machine_function(function_name.clone());
@@ -905,8 +907,7 @@ impl<T: LoweringTarget> Lowerer<T> {
                     inner
                         .iter()
                         .filter_map(|info| {
-                            info.filter_pred(block_id)
-                                .map(|ptr| (info.get_dst(), ptr.clone()))
+                            info.filter_pred(block_id).map(|ptr| (info.get_dst(), ptr))
                         })
                         .collect()
                 };
@@ -928,18 +929,20 @@ impl<T: LoweringTarget> Lowerer<T> {
                         func: block.func,
                         block: cond_branch.else_block,
                     };
-                    let mut true_block_id = state.block_id(&true_block).ok_or_else(|| {
-                        LowerError::UnknownBlock {
-                            function: state.function_name.clone(),
-                            block_name: block_name(module, true_block),
-                        }
-                    })?;
-                    let mut false_block_id = state
-                        .block_id(&false_block)
-                        .ok_or_else(|| LowerError::UnknownBlock {
-                            function: state.function_name.clone(),
-                            block_name: block_name(module, false_block),
-                        })?;
+                    let mut true_block_id =
+                        state
+                            .block_id(&true_block)
+                            .ok_or_else(|| LowerError::UnknownBlock {
+                                function: state.function_name.clone(),
+                                block_name: block_name(module, true_block),
+                            })?;
+                    let mut false_block_id =
+                        state
+                            .block_id(&false_block)
+                            .ok_or_else(|| LowerError::UnknownBlock {
+                                function: state.function_name.clone(),
+                                block_name: block_name(module, false_block),
+                            })?;
 
                     let true_block_phis: Option<Vec<_>> = state
                         .phi_infos
@@ -950,29 +953,30 @@ impl<T: LoweringTarget> Lowerer<T> {
                         .get(&false_block_id)
                         .map(collect_phis_from_info);
 
-                    let mut add_transit_block = |target_block_id: BlockId,
-                                                 target_block_phis: Vec<(VRegId, ValueId)>|
-                     -> Result<BlockId, LowerError> {
-                        let transit_block_id = machine_function.blocks.len();
-                        let mut transit_insts: Vec<T::MachineInst> = Vec::new();
+                    let mut add_transit_block =
+                        |target_block_id: BlockId,
+                         target_block_phis: Vec<(VRegId, ValueId)>|
+                         -> Result<BlockId, LowerError> {
+                            let transit_block_id = machine_function.blocks.len();
+                            let mut transit_insts: Vec<T::MachineInst> = Vec::new();
 
-                        parallel_copy(
-                            module,
-                            target_block_phis,
-                            &mut transit_insts,
-                            state,
-                            machine_function,
-                            machine_module,
-                        )?;
-                        transit_insts.push(T::emit_jump(target_block_id));
-                        let transit_block = MachineBlock {
-                            id: BlockId(transit_block_id),
-                            name: format!(".bb{transit_block_id}"),
-                            instructions: transit_insts,
+                            parallel_copy(
+                                module,
+                                target_block_phis,
+                                &mut transit_insts,
+                                state,
+                                machine_function,
+                                machine_module,
+                            )?;
+                            transit_insts.push(T::emit_jump(target_block_id));
+                            let transit_block = MachineBlock {
+                                id: BlockId(transit_block_id),
+                                name: format!(".bb{transit_block_id}"),
+                                instructions: transit_insts,
+                            };
+                            machine_function.blocks.push(transit_block);
+                            Ok(BlockId(transit_block_id))
                         };
-                        machine_function.blocks.push(transit_block);
-                        Ok(BlockId(transit_block_id))
-                    };
 
                     if let Some(true_block_phis) = &true_block_phis
                         && !true_block_phis.is_empty()
@@ -998,12 +1002,13 @@ impl<T: LoweringTarget> Lowerer<T> {
                         func: block.func,
                         block: *then_block,
                     };
-                    let target_block_id = state
-                        .block_id(&target_block)
-                        .ok_or_else(|| LowerError::UnknownBlock {
-                            function: state.function_name.clone(),
-                            block_name: block_name(module, target_block),
-                        })?;
+                    let target_block_id =
+                        state
+                            .block_id(&target_block)
+                            .ok_or_else(|| LowerError::UnknownBlock {
+                                function: state.function_name.clone(),
+                                block_name: block_name(module, target_block),
+                            })?;
 
                     let target_block_phis: Option<Vec<_>> = state
                         .phi_infos
@@ -1059,7 +1064,8 @@ impl<T: LoweringTarget> Lowerer<T> {
                             LayoutShape::Struct(_) => {
                                 let struct_layout = current_layout.shape.as_struct().unwrap();
                                 let field_index = if let ValueId::Const(constant) = *index
-                                    && let ConstKind::Int(number) = &module.const_data(constant).kind
+                                    && let ConstKind::Int(number) =
+                                        &module.const_data(constant).kind
                                 {
                                     *number as usize
                                 } else {
@@ -1085,7 +1091,8 @@ impl<T: LoweringTarget> Lowerer<T> {
                                     out.push(T::emit_add(temp_reg, base, imm_reg));
                                 }
                                 base = temp_reg;
-                                ty = ty.as_struct().unwrap().get_body().unwrap()[field_index].clone();
+                                ty = ty.as_struct().unwrap().get_body().unwrap()[field_index]
+                                    .clone();
                             }
                             LayoutShape::Array(_) => {
                                 let array_layout = current_layout.shape.as_array().unwrap();
