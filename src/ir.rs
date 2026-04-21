@@ -7,6 +7,8 @@ pub mod destructor;
 pub mod ir_output;
 pub mod ir_type;
 pub mod layout;
+pub mod opt;
+mod cfg;
 
 use std::{
     cell::RefCell,

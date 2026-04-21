@@ -99,6 +99,7 @@ fn run_test_cases_with_reimu(escape_list: &[&str], case_path: &str, stop_at_faul
         let should_pass = x.compileexitcode == 0;
 
         let timer = std::time::Instant::now();
+        let sub_timer = std::time::Instant::now();
 
         let parser_result = panic::catch_unwind(|| -> Result<Crate, String> {
             let lexer = Lexer::new(&src);
@@ -121,6 +122,9 @@ fn run_test_cases_with_reimu(escape_list: &[&str], case_path: &str, stop_at_faul
                 }
             }
         };
+
+        let parse_time = sub_timer.elapsed();
+        let sub_timer = std::time::Instant::now();
 
         let semantic_result = panic::catch_unwind(|| -> Result<_, String> {
             let (analyzer, result) = SemanticAnalyzer::visit(&krate);
@@ -148,9 +152,20 @@ fn run_test_cases_with_reimu(escape_list: &[&str], case_path: &str, stop_at_faul
             fault!("{name} semantic check passed, expect fail!");
         }
 
+        let semantic_time = sub_timer.elapsed();
+        let mut ir_time: std::time::Duration = std::time::Duration::new(0, 0);
+        let mut asm_time: std::time::Duration = std::time::Duration::new(0, 0);
+
         let asm = match panic::catch_unwind(AssertUnwindSafe(|| {
+            let sub_timer = std::time::Instant::now();
+
             let mut generator = IRGenerator::new(&analyzer, TargetDataLayout::rv32());
             generator.visit(&krate);
+
+            ir_time = sub_timer.elapsed();
+
+            let sub_timer = std::time::Instant::now();
+
             let module = generator.module();
 
             let mut lowerer = RV32Lowerer::with_options(LowerOptions {
@@ -158,6 +173,8 @@ fn run_test_cases_with_reimu(escape_list: &[&str], case_path: &str, stop_at_faul
                 need_branch_relaxation: true,
             });
             let machine_module = lowerer.lower_module(&module).expect("MIR lowering failed");
+
+            asm_time = sub_timer.elapsed();
 
             machine_module.to_string()
         })) {
@@ -215,7 +232,9 @@ fn run_test_cases_with_reimu(escape_list: &[&str], case_path: &str, stop_at_faul
 
         let running_time = timer.elapsed();
 
-        println!("{name} passed! Compile time: {compile_time:.2?}, Running time: {running_time:.2?}");
+        println!(
+            "{name} passed! Compile time: {compile_time:.2?} (Semantic: {semantic_time:.2?}, IR: {ir_time:.2?}, ASM: {asm_time:.2?}), Running time: {running_time:.2?}"
+        );
         success += 1;
     }
 
