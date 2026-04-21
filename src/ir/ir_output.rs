@@ -381,6 +381,7 @@ impl ModuleCore {
                 helper.append(&format!(r##"c"{}""##, bytes_escape(value)));
             }
             ConstKind::Null => helper.append("null"),
+            ConstKind::Undef => helper.append("undef"),
         }
     }
 

@@ -39,11 +39,14 @@ impl ControlFlowGraph {
         }
 
         dfs_visit(self, &mut visited, &mut order, self.entry);
-        let dfn = order
+        let dfn: HashMap<BlockId, usize> = order
             .iter()
             .enumerate()
             .map(|(i, block)| (*block, i))
             .collect();
+
+        assert!(dfn.len() == self.succs.len(), "CFG is not fully connected");
+
         (order, dfn)
     }
 
@@ -97,7 +100,7 @@ impl ControlFlowGraph {
             let parent = disjoint_set[node];
             link(parent, *node, &mut disjoint_set);
 
-            for v in bucket[&parent].iter() {
+            for v in bucket.entry(parent).or_default().iter() {
                 let w = find(*v, &mut disjoint_set, &dfn, &sdom, &mut best);
                 if sdom[&w] == sdom[v] {
                     idom.insert(*v, sdom[v]);
@@ -128,6 +131,24 @@ impl ControlFlowGraph {
             children,
             idom,
         }
+    }
+
+    pub(super) fn build_dom_frontier(&self, dom_tree: &DominatorTree) -> HashMap<BlockId, HashSet<BlockId>> {
+        let mut frontier: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
+
+        for block in self.succs.keys() {
+            if self.preds[block].len() >= 2 {
+                for pred in &self.preds[block] {
+                    let mut runner = *pred;
+                    while runner != dom_tree.idom[block] {
+                        frontier.entry(runner).or_default().insert(*block);
+                        runner = dom_tree.idom[&runner];
+                    }
+                }
+            }
+        }
+
+        frontier
     }
 }
 

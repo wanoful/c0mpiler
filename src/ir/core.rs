@@ -647,14 +647,6 @@ impl ModuleCore {
     pub(crate) fn append_phi(&mut self, block: BlockRef, inst: InstRef) {
         self.assert_can_insert(block, inst);
         assert!(self.inst(inst).kind.is_phi());
-        assert!(
-            self.block(block).insts.is_empty(),
-            "Phi nodes must be placed before all other instructions in the block"
-        );
-        assert!(
-            self.block(block).terminator.is_none(),
-            "Phi nodes cannot be placed in a block with a terminator"
-        );
         self.block_mut(block).phis.push(inst.inst);
         self.inst_mut(inst).parent = Some(block);
         self.register_inst_use(inst);

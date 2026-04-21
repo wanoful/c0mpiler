@@ -1602,6 +1602,7 @@ fn lower_const_data(
             Ok(bytes)
         }
         ConstKind::Null => Ok(vec![0; type_layout.layout.size as usize]),
+        ConstKind::Undef => todo!(),
     }
 }
 

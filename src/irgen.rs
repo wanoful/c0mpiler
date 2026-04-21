@@ -383,6 +383,10 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     pub(crate) fn clear_core_expr_value(&mut self, expr_id: &NodeId) {
         self.core_expr_values.remove(expr_id);
     }
+
+    pub fn opt_mem2reg(&mut self) {
+        self.core_module.borrow_mut().opt_pass_mem2reg();
+    }
 }
 
 fn add_builtin_struct_types(context: &LLVMContext) {

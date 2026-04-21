@@ -9,6 +9,7 @@ pub enum ConstKind {
     Struct(Vec<ConstId>),
     String(String),
     Null,
+    Undef,
 }
 
 #[derive(Debug, EnumAsInner)]
