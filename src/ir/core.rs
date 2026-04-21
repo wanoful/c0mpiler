@@ -437,6 +437,10 @@ impl ModuleCore {
         self.add_const(Rc::new(Type::Ptr(PtrType)), ConstKind::Null)
     }
 
+    pub fn add_undef_const(&mut self, ty: TypePtr) -> ConstId {
+        self.add_const(ty, ConstKind::Undef)
+    }
+
     pub fn add_string_const(&mut self, value: impl Into<String>) -> ConstId {
         let value = value.into();
         let len = value.len() as u32;
@@ -869,6 +873,14 @@ impl ModuleCore {
                 }
             }
             _ => panic!("Expected a phi instruction"),
+        }
+    }
+
+    pub(crate) fn block_successors(&self, block: BlockRef) -> Vec<BlockRef> {
+        if let Some(terminator) = self.terminator(block) {
+            self.successors(terminator)
+        } else {
+            vec![]
         }
     }
 
