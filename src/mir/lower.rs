@@ -867,20 +867,27 @@ impl<T: LoweringTarget> Lowerer<T> {
                     num_args.saturating_sub(T::num_arg_regs()) * T::stack_arg_size();
                 machine_function.record_outgoing_arg(stack_arg_size);
 
-                for (index, arg) in args.iter().enumerate() {
-                    let rs = lower_operand(
-                        module,
-                        *arg,
-                        &mut out,
-                        state,
-                        machine_function,
-                        machine_module,
-                    )?;
+                let lowered_args = args
+                    .iter()
+                    .map(|arg| {
+                        lower_operand(
+                            module,
+                            *arg,
+                            &mut out,
+                            state,
+                            machine_function,
+                            machine_module,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                let mut register_moves = Vec::new();
+                for (index, rs) in lowered_args.into_iter().enumerate() {
                     if index < T::num_arg_regs() {
-                        out.push(T::MachineInst::mv(
-                            Register::Physical(T::arg_reg(index)),
-                            rs,
-                        ));
+                        register_moves.push(CopyMove {
+                            dst: Register::Physical(T::arg_reg(index)),
+                            src: rs,
+                        });
                     } else {
                         let rt = Register::Virtual(machine_function.new_vreg());
                         out.push(T::emit_store_outgoing_arg(
@@ -890,6 +897,8 @@ impl<T: LoweringTarget> Lowerer<T> {
                         ));
                     }
                 }
+
+                out.extend(resolve_parallel_copy(register_moves, machine_function));
 
                 out.push(T::emit_call(func_id, num_args));
 
