@@ -465,6 +465,7 @@ impl TargetInst for RV32Inst {
 
 impl LoweringTarget for RV32Arch {
     const WORD_SIZE: usize = 4;
+    const FRAME_ALIGN: usize = 16;
 
     fn zero_reg() -> Self::PhysicalReg {
         RV32Reg::Zero

@@ -88,6 +88,7 @@ pub trait TargetInst {
 
 pub trait LoweringTarget: TargetArch + Default {
     const WORD_SIZE: usize;
+    const FRAME_ALIGN: usize;
 
     fn zero_reg() -> Self::PhysicalReg;
     fn return_reg() -> Self::PhysicalReg;

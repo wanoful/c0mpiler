@@ -58,7 +58,7 @@ impl<T: LoweringTarget> Lowerer<T> {
             current_offset += slot.size;
         }
 
-        let frame_align = frame_info.max_align.max(T::WORD_SIZE);
+        let frame_align = frame_info.max_align.max(T::FRAME_ALIGN);
         let frame_size = current_offset.next_multiple_of(frame_align);
 
         let layout = FrameLayout {
