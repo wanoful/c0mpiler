@@ -52,6 +52,10 @@ pub enum LowerError {
         opcode: String,
     },
     TypeLayoutError(String),
+    UnknownOperand {
+        function: String,
+        operand: String,
+    },
 }
 
 impl Display for LowerError {
@@ -88,6 +92,9 @@ impl Display for LowerError {
                 "instruction lowering for `{opcode}` in function `{function}` has not been implemented yet"
             ),
             LowerError::TypeLayoutError(e) => write!(f, "type layout error: {e}"),
+            LowerError::UnknownOperand { function, operand } => {
+                write!(f, "unknown operand `{operand}` in function `{function}`")
+            }
         }
     }
 }
@@ -147,6 +154,7 @@ fn lower_operand<R: LoweringTarget>(
                 out.push(R::MachineInst::load_imm(Register::Virtual(vreg), 0));
                 return Ok(Register::Virtual(vreg));
             }
+            ConstKind::Undef => return Ok(Register::Physical(R::zero_reg())),
             _ => {
                 return Err(LowerError::UnimplementedGlobal(
                     "non-scalar constant operand lowering is not implemented yet".to_string(),
@@ -158,9 +166,9 @@ fn lower_operand<R: LoweringTarget>(
     if let Some(vreg) = state.vreg_for_value(operand) {
         Ok(Register::Virtual(vreg))
     } else {
-        Err(LowerError::UnknownBlock {
+        Err(LowerError::UnknownOperand {
             function: state.function_name.clone(),
-            block_name: value_name(module, operand),
+            operand: value_name(module, operand).unwrap_or_else(|| "unknown".into()),
         })
     }
 }
@@ -609,15 +617,18 @@ impl<T: LoweringTarget> Lowerer<T> {
         self.collect_phis(module, &mut machine_function, &mut state)?;
         self.initialize_func_arguments(function, module, &mut machine_function, &mut state);
 
-        machine_function.entry =
-            state
-                .block_id(&entry)
-                .ok_or_else(|| LowerError::UnknownBlock {
-                    function: function_name.clone(),
-                    block_name: block_name(module, entry),
-                })?;
+        machine_function.entry = state.block_id(&entry).unwrap_or_else(|| {
+            panic!(
+                "entry block should have been initialized: {:?}.\nFunction: {}\n State: {:#?}",
+                entry, function_name, state
+            )
+        });
 
-        for block in &blocks {
+        for &block in blocks.iter() {
+            self.collect_value(block, &mut machine_function, module, &mut state);
+        }
+
+        for &block in blocks.iter() {
             self.lower_block(
                 block,
                 &mut machine_function,
@@ -660,19 +671,61 @@ impl<T: LoweringTarget> Lowerer<T> {
         Ok(())
     }
 
+    fn collect_value(
+        &mut self,
+        block: BlockRef,
+        machine_function: &mut MachineFunction<T>,
+        module: &ModuleCore,
+        state: &mut FunctionLoweringState,
+    ) {
+        for instruction in module.phis_in_order(block) {
+            if !module.value_ty(ValueId::Inst(instruction)).is_void() {
+                self.ensure_inst_vreg(instruction, machine_function, state);
+            }
+        }
+
+        for instruction in module.insts_in_order(block) {
+            if !module.value_ty(ValueId::Inst(instruction)).is_void() {
+                self.ensure_inst_vreg(instruction, machine_function, state);
+            }
+        }
+
+        if let Some(instruction) = module.terminator(block)
+            && !module.value_ty(ValueId::Inst(instruction)).is_void()
+        {
+            self.ensure_inst_vreg(instruction, machine_function, state);
+        }
+    }
+
+    fn ensure_inst_vreg(
+        &self,
+        instruction: InstRef,
+        machine_function: &mut MachineFunction<T>,
+        state: &mut FunctionLoweringState,
+    ) -> VRegId {
+        let value = ValueId::Inst(instruction);
+        if let Some(vreg) = state.vreg_for_value(value) {
+            vreg
+        } else {
+            let vreg = machine_function.new_vreg();
+            state.record_vreg(value, vreg);
+            vreg
+        }
+    }
+
     fn lower_block(
         &mut self,
-        block: &BlockRef,
+        block: BlockRef,
         machine_function: &mut MachineFunction<T>,
         module: &ModuleCore,
         machine_module: &mut MachineModule<T>,
         state: &mut FunctionLoweringState,
     ) -> Result<(), LowerError> {
-        let block_id = state.block_id(block).unwrap();
-        for instruction in module.phis_in_order(*block) {
+        let block_id = state.block_id(&block).unwrap();
+        for instruction in module.phis_in_order(block) {
             let insts = self.lower_instruction(
                 instruction,
-                *block,
+                block,
                 block_id,
                 module,
                 machine_function,
@@ -686,10 +739,10 @@ impl<T: LoweringTarget> Lowerer<T> {
                 .extend(insts);
         }
 
-        for instruction in module.insts_in_order(*block) {
+        for instruction in module.insts_in_order(block) {
             let insts = self.lower_instruction(
                 instruction,
-                *block,
+                block,
                 block_id,
                 module,
                 machine_function,
@@ -703,10 +756,10 @@ impl<T: LoweringTarget> Lowerer<T> {
                 .extend(insts);
         }
 
-        if let Some(instruction) = module.terminator(*block) {
+        if let Some(instruction) = module.terminator(block) {
             let insts = self.lower_instruction(
                 instruction,
-                *block,
+                block,
                 block_id,
                 module,
                 machine_function,
@@ -762,7 +815,7 @@ impl<T: LoweringTarget> Lowerer<T> {
                             | BinaryOpcode::Xor
                     )
                 {
-                    let rd_vreg = machine_function.new_vreg();
+                    let rd_vreg = self.ensure_inst_vreg(instruction, machine_function, state);
                     let rd = Register::Virtual(rd_vreg);
                     let imm = *number as i32;
                     let lowered = match op {
@@ -796,7 +849,6 @@ impl<T: LoweringTarget> Lowerer<T> {
 
                     if let Some(lowered) = lowered {
                         out.push(lowered);
-                        state.record_vreg(ValueId::Inst(instruction), rd_vreg);
                         return Ok(out);
                     }
                 }
@@ -809,7 +861,7 @@ impl<T: LoweringTarget> Lowerer<T> {
                     machine_function,
                     machine_module,
                 )?;
-                let rd_vreg = machine_function.new_vreg();
+                let rd_vreg = self.ensure_inst_vreg(instruction, machine_function, state);
                 let rd = Register::Virtual(rd_vreg);
 
                 let lowered = match op {
@@ -829,7 +881,6 @@ impl<T: LoweringTarget> Lowerer<T> {
                 };
 
                 out.push(lowered);
-                state.record_vreg(ValueId::Inst(instruction), rd_vreg);
             }
             InstKind::Call { func, args } => {
                 let raw_callee_name = module.func(*func).name.clone();
@@ -903,12 +954,11 @@ impl<T: LoweringTarget> Lowerer<T> {
                 out.push(T::emit_call(func_id, num_args));
 
                 if !module.value_ty(ValueId::Inst(instruction)).is_void() {
-                    let rd_vreg = machine_function.new_vreg();
+                    let rd_vreg = self.ensure_inst_vreg(instruction, machine_function, state);
                     out.push(T::MachineInst::mv(
                         Register::Virtual(rd_vreg),
                         Register::Physical(T::return_reg()),
                     ));
-                    state.record_vreg(ValueId::Inst(instruction), rd_vreg);
                 }
             }
             InstKind::Branch { then_block, cond } => {
@@ -938,20 +988,8 @@ impl<T: LoweringTarget> Lowerer<T> {
                         func: block.func,
                         block: cond_branch.else_block,
                     };
-                    let mut true_block_id =
-                        state
-                            .block_id(&true_block)
-                            .ok_or_else(|| LowerError::UnknownBlock {
-                                function: state.function_name.clone(),
-                                block_name: block_name(module, true_block),
-                            })?;
-                    let mut false_block_id =
-                        state
-                            .block_id(&false_block)
-                            .ok_or_else(|| LowerError::UnknownBlock {
-                                function: state.function_name.clone(),
-                                block_name: block_name(module, false_block),
-                            })?;
+                    let mut true_block_id = state.block_id(&true_block).unwrap();
+                    let mut false_block_id = state.block_id(&false_block).unwrap();
 
                     let true_block_phis: Option<Vec<_>> = state
                         .phi_infos
@@ -1011,13 +1049,7 @@ impl<T: LoweringTarget> Lowerer<T> {
                         func: block.func,
                         block: *then_block,
                     };
-                    let target_block_id =
-                        state
-                            .block_id(&target_block)
-                            .ok_or_else(|| LowerError::UnknownBlock {
-                                function: state.function_name.clone(),
-                                block_name: block_name(module, target_block),
-                            })?;
+                    let target_block_id = state.block_id(&target_block).unwrap();
 
                     let target_block_phis: Option<Vec<_>> = state
                         .phi_infos
@@ -1127,15 +1159,11 @@ impl<T: LoweringTarget> Lowerer<T> {
                     }
                 }
 
-                let result_vreg = match base {
-                    Register::Virtual(vreg) => vreg,
-                    Register::Physical(_) => {
-                        let result_vreg = machine_function.new_vreg();
-                        out.push(T::MachineInst::mv(Register::Virtual(result_vreg), base));
-                        result_vreg
-                    }
-                };
-                state.record_vreg(ValueId::Inst(instruction), result_vreg);
+                let rd_vreg = self.ensure_inst_vreg(instruction, machine_function, state);
+                match base {
+                    Register::Virtual(vreg) if vreg == rd_vreg => {}
+                    _ => out.push(T::MachineInst::mv(Register::Virtual(rd_vreg), base)),
+                }
             }
             InstKind::Alloca { ty } => {
                 let layout = type_layout(module, ty)?;
@@ -1145,15 +1173,14 @@ impl<T: LoweringTarget> Lowerer<T> {
                     crate::mir::StackSlotKind::Alloca,
                 );
                 state.stack_slots.insert(instruction, stack_slot_id);
-                let rd_vreg = machine_function.new_vreg();
+                let rd_vreg = self.ensure_inst_vreg(instruction, machine_function, state);
                 out.push(T::emit_get_stack_addr(
                     Register::Virtual(rd_vreg),
                     stack_slot_id,
                 ));
-                state.record_vreg(ValueId::Inst(instruction), rd_vreg);
             }
             InstKind::Load { ptr } => {
-                let rd_vreg = machine_function.new_vreg();
+                let rd_vreg = self.ensure_inst_vreg(instruction, machine_function, state);
                 let ty = module.value_ty(ValueId::Inst(instruction)).clone();
                 let type_layout = type_layout(module, &ty)?;
                 let rd = Register::Virtual(rd_vreg);
@@ -1195,7 +1222,6 @@ impl<T: LoweringTarget> Lowerer<T> {
                     }
                     _ => panic!("unsupported load size"),
                 }
-                state.record_vreg(ValueId::Inst(instruction), rd_vreg);
             }
             InstKind::Ret { value } => {
                 if let Some(value) = value {
@@ -1278,10 +1304,9 @@ impl<T: LoweringTarget> Lowerer<T> {
                     machine_function,
                     machine_module,
                 )?;
-                let rd_vreg = machine_function.new_vreg();
+                let rd_vreg = self.ensure_inst_vreg(instruction, machine_function, state);
                 let rd = Register::Virtual(rd_vreg);
                 emit_icmp(op, rd, rs1, rs2, &mut out, machine_function);
-                state.record_vreg(ValueId::Inst(instruction), rd_vreg);
             }
             InstKind::Phi { .. } => {
                 assert!(
@@ -1344,13 +1369,12 @@ impl<T: LoweringTarget> Lowerer<T> {
                     false_val,
                     Register::Virtual(mask2),
                 ));
-                let rd_vreg = machine_function.new_vreg();
+                let rd_vreg = self.ensure_inst_vreg(instruction, machine_function, state);
                 out.push(T::emit_or(
                     Register::Virtual(rd_vreg),
                     Register::Virtual(true_part),
                     Register::Virtual(false_part),
                 ));
-                state.record_vreg(ValueId::Inst(instruction), rd_vreg);
             }
             InstKind::PtrToInt { ptr } => {
                 let src = lower_operand(
@@ -1361,9 +1385,8 @@ impl<T: LoweringTarget> Lowerer<T> {
                     machine_function,
                     machine_module,
                 )?;
-                let rd_vreg = machine_function.new_vreg();
+                let rd_vreg = self.ensure_inst_vreg(instruction, machine_function, state);
                 out.push(T::MachineInst::mv(Register::Virtual(rd_vreg), src));
-                state.record_vreg(ValueId::Inst(instruction), rd_vreg);
             }
             InstKind::Trunc { value } => {
                 let dst_ty = module.value_ty(ValueId::Inst(instruction));
@@ -1377,11 +1400,10 @@ impl<T: LoweringTarget> Lowerer<T> {
                 )?;
                 let dst_bits = dst_ty.as_int().unwrap().0;
                 let masked = emit_masked_value(src, dst_bits, &mut out, machine_function);
-                let rd_vreg = match masked {
-                    Register::Virtual(vreg) => vreg,
-                    Register::Physical(_) => unreachable!("masked value should be virtual"),
-                };
-                state.record_vreg(ValueId::Inst(instruction), rd_vreg);
+                let rd_vreg = self.ensure_inst_vreg(instruction, machine_function, state);
+                if masked != Register::Virtual(rd_vreg) {
+                    out.push(T::MachineInst::mv(Register::Virtual(rd_vreg), masked));
+                }
             }
             InstKind::Zext { value } => {
                 let src = lower_operand(
@@ -1394,11 +1416,10 @@ impl<T: LoweringTarget> Lowerer<T> {
                 )?;
                 let src_bits = module.value_ty(*value).as_int().unwrap().0;
                 let extended = emit_masked_value(src, src_bits, &mut out, machine_function);
-                let rd_vreg = match extended {
-                    Register::Virtual(vreg) => vreg,
-                    Register::Physical(_) => unreachable!("zero-extended value should be virtual"),
-                };
-                state.record_vreg(ValueId::Inst(instruction), rd_vreg);
+                let rd_vreg = self.ensure_inst_vreg(instruction, machine_function, state);
+                if extended != Register::Virtual(rd_vreg) {
+                    out.push(T::MachineInst::mv(Register::Virtual(rd_vreg), extended));
+                }
             }
             InstKind::Sext { value } => {
                 let src = lower_operand(
@@ -1409,7 +1430,7 @@ impl<T: LoweringTarget> Lowerer<T> {
                     machine_function,
                     machine_module,
                 )?;
-                let rd_vreg = machine_function.new_vreg();
+                let rd_vreg = self.ensure_inst_vreg(instruction, machine_function, state);
                 let src_bits = module.value_ty(*value).as_int().unwrap().0;
                 if src_bits >= 32 {
                     out.push(T::MachineInst::mv(Register::Virtual(rd_vreg), src));
@@ -1422,7 +1443,6 @@ impl<T: LoweringTarget> Lowerer<T> {
                         shift as i32,
                     ));
                 }
-                state.record_vreg(ValueId::Inst(instruction), rd_vreg);
             }
             InstKind::Unreachable => {}
         };

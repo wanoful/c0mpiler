@@ -161,6 +161,7 @@ fn run_test_cases_with_reimu(escape_list: &[&str], case_path: &str, stop_at_faul
 
             let mut generator = IRGenerator::new(&analyzer, TargetDataLayout::rv32());
             generator.visit(&krate);
+            generator.opt_mem2reg();
 
             ir_time = sub_timer.elapsed();
 
@@ -233,7 +234,7 @@ fn run_test_cases_with_reimu(escape_list: &[&str], case_path: &str, stop_at_faul
         let running_time = timer.elapsed();
 
         println!(
-            "{name} passed! Compile time: {compile_time:.2?} (Semantic: {semantic_time:.2?}, IR: {ir_time:.2?}, ASM: {asm_time:.2?}), Running time: {running_time:.2?}"
+            "{name} passed! Compile time: {compile_time:.2?} (Parse: {parse_time:.2?}, Semantic: {semantic_time:.2?}, IR: {ir_time:.2?}, ASM: {asm_time:.2?}), Running time: {running_time:.2?}"
         );
         success += 1;
     }

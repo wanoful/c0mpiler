@@ -75,6 +75,7 @@ pub struct BlockData {
     pub parent: FunctionId,
 }
 
+#[derive(Debug)]
 pub struct InstData {
     pub parent: Option<BlockRef>,
     pub ty: TypePtr,
