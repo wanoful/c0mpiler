@@ -831,6 +831,16 @@ impl LoweringTarget for RV32Arch {
             _ => vec![inst.clone()],
         }
     }
+
+    fn is_jump_to(inst: &RV32Inst, target: BlockId) -> bool {
+        match inst {
+            RV32Inst::Jal {
+                rd: Register::Physical(RV32Reg::Zero),
+                label,
+            } => *label == target,
+            _ => false,
+        }
+    }
 }
 
 #[cfg(test)]

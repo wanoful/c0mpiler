@@ -172,6 +172,7 @@ fn run_test_cases_with_reimu(escape_list: &[&str], case_path: &str, stop_at_faul
             let mut lowerer = RV32Lowerer::with_options(LowerOptions {
                 lower_function_bodies: true,
                 need_branch_relaxation: true,
+                optimize_fallthroughs: true,
             });
             let machine_module = lowerer.lower_module(&module).expect("MIR lowering failed");
 

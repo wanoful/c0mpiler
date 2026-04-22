@@ -1,5 +1,6 @@
 pub mod lower;
 pub(crate) mod macros;
+pub(crate) mod opt;
 pub(crate) mod print;
 pub mod rv32im;
 
@@ -278,6 +279,8 @@ pub trait LoweringTarget: TargetArch + Default {
     ) -> Vec<Self::MachineInst>
     where
         Self: Sized;
+
+    fn is_jump_to(inst: &Self::MachineInst, target: BlockId) -> bool;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -32,6 +32,7 @@ use crate::mir::TargetInst;
 pub struct LowerOptions {
     pub lower_function_bodies: bool,
     pub need_branch_relaxation: bool,
+    pub optimize_fallthroughs: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -642,6 +643,10 @@ impl<T: LoweringTarget> Lowerer<T> {
         self.compute_frame_layout(&mut machine_function);
         self.insert_logue(&mut machine_function);
         self.expand_pseudo_instructions(&mut machine_function);
+
+        if self.options.optimize_fallthroughs {
+            self.optimize_fallthroughs(&mut machine_function);
+        }
 
         if self.options.need_branch_relaxation {
             self.relax_branches(&mut machine_function)?;
