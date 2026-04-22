@@ -144,6 +144,9 @@ fn lower_operand<R: LoweringTarget>(
     if let ValueId::Const(constant) = operand {
         match &module.const_data(constant).kind {
             ConstKind::Int(number) => {
+                if *number == 0 {
+                    return Ok(Register::Physical(R::zero_reg()));
+                }
                 let vreg = machine_function.new_vreg();
                 out.push(R::MachineInst::load_imm(
                     Register::Virtual(vreg),
@@ -152,9 +155,7 @@ fn lower_operand<R: LoweringTarget>(
                 return Ok(Register::Virtual(vreg));
             }
             ConstKind::Null => {
-                let vreg = machine_function.new_vreg();
-                out.push(R::MachineInst::load_imm(Register::Virtual(vreg), 0));
-                return Ok(Register::Virtual(vreg));
+                return Ok(Register::Physical(R::zero_reg()));
             }
             ConstKind::Undef => return Ok(Register::Physical(R::zero_reg())),
             _ => {
