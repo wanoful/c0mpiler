@@ -54,6 +54,19 @@ fn my_ir() {
 }
 
 #[test]
+fn my_asm() {
+    let escape_list = [];
+    let case_path = "testcases/asm";
+
+    if let Some(reimu_path) = option_env!("REIMU_PATH") {
+        println!("Using reimu at path: {}", reimu_path);
+        run_test_cases_with_reimu(reimu_path, &escape_list, case_path, true);
+    } else {
+        run_test_cases(&escape_list, case_path, true, false);
+    }
+}
+
+#[test]
 fn ir_1() {
     let escape_list = [];
     let case_path = "RCompiler-Testcases/IR-1";
@@ -171,7 +184,7 @@ fn run_test_cases(
             generator.visit(&krate);
             generator.opt_merge_return();
             generator.opt_mem2reg();
-            generator.opt_dce();
+            generator.opt_adce();
             generator.print()
         })) {
             Ok(ir) => ir,

@@ -67,6 +67,7 @@ pub struct FunctionData {
     pub is_declare: bool,
 }
 
+#[derive(Debug)]
 pub struct BlockData {
     pub name: Option<String>,
     pub phis: Vec<InstId>,

@@ -1,4 +1,5 @@
 pub mod attribute;
+mod cfg;
 pub mod core;
 pub mod core_builder;
 pub mod core_inst;
@@ -8,7 +9,6 @@ pub mod ir_output;
 pub mod ir_type;
 pub mod layout;
 pub mod opt;
-mod cfg;
 
 use std::{
     cell::RefCell,
@@ -196,13 +196,10 @@ impl LLVMContextImpl {
     }
 
     fn function_type(&mut self, ret_type: TypePtr, arg_tys: Vec<TypePtr>) -> FunctionTypePtr {
-        FunctionTypePtr(
-            self.ty_pool
-                .get_ty(&Type::Function(FunctionType {
-                    return_type: ret_type,
-                    param_types: arg_tys,
-                })),
-        )
+        FunctionTypePtr(self.ty_pool.get_ty(&Type::Function(FunctionType {
+            return_type: ret_type,
+            param_types: arg_tys,
+        })))
     }
 
     fn create_opaque_struct_type(&mut self, name: &str) -> StructTypePtr {

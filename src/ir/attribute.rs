@@ -32,7 +32,11 @@ pub struct AttributeSet {
 impl AttributeSet {
     pub fn insert(&mut self, attr: Attribute) -> Option<Attribute> {
         let kind = attr.kind();
-        if let Some(slot) = self.defined.iter_mut().find(|defined| defined.kind() == kind) {
+        if let Some(slot) = self
+            .defined
+            .iter_mut()
+            .find(|defined| defined.kind() == kind)
+        {
             Some(std::mem::replace(slot, attr))
         } else {
             self.defined.push(attr);

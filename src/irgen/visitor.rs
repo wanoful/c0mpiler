@@ -309,6 +309,12 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
     ) -> Self::DefaultRes<'_> {
         let scope = self.analyzer.get_scope(extra.self_id);
         let (ty, for_trait) = scope.kind.as_impl().unwrap();
+
+        // TODO: 遍历 impl 应该可以改为不依赖 ast 树，而不是使用这个 hack
+        if !self.visited_impls.insert((*ty, *for_trait)) {
+            return;
+        }
+
         let impls = self.analyzer.get_impls(ty).unwrap();
         let impl_info = if let Some(trait_intern) = for_trait {
             let trait_instance = self
