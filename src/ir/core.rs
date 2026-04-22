@@ -722,6 +722,16 @@ impl ModuleCore {
         self.inst_mut(inst).parent = None;
     }
 
+    pub(crate) fn erase_inst_from_parent_forcely(&mut self, inst: InstRef) {
+        let value  = ValueId::Inst(inst);
+        for Use { user, slot } in self.value_uses(value).to_vec() {
+            let undefined_constant = ValueId::Const(self.add_undef_const(self.value_ty(value).clone()));
+            self.replace_inst_operand(user, slot, undefined_constant);
+        }
+
+        self.erase_inst_from_parent(inst);
+    }
+
     pub(crate) fn erase_inst_from_parent(&mut self, inst: InstRef) {
         let value = ValueId::Inst(inst);
         assert!(

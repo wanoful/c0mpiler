@@ -170,6 +170,7 @@ fn run_test_cases(
             );
             generator.visit(&krate);
             generator.opt_mem2reg();
+            generator.opt_dce();
             generator.print()
         })) {
             Ok(ir) => ir,

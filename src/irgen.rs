@@ -387,6 +387,10 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     pub fn opt_mem2reg(&mut self) {
         self.core_module.borrow_mut().opt_pass_mem2reg();
     }
+
+    pub fn opt_dce(&mut self) {
+        self.core_module.borrow_mut().opt_dead_code_elimination();
+    }
 }
 
 fn add_builtin_struct_types(context: &LLVMContext) {
