@@ -438,6 +438,29 @@ impl TargetInst for RV32Inst {
             _ => HashMap::new(),
         }
     }
+
+    fn as_move(&self) -> Option<(Register<Self::PhysicalReg>, Register<Self::PhysicalReg>)> {
+        match self {
+            RV32Inst::Mv { rd, rs } => Some((*rd, *rs)),
+            RV32Inst::Addi { rd, rs1, imm }
+            | RV32Inst::Xori { rd, rs1, imm }
+            | RV32Inst::Ori { rd, rs1, imm } => {
+                if *imm == 0 {
+                    Some((*rd, *rs1))
+                } else {
+                    None
+                }
+            }
+            RV32Inst::Andi { rd, rs1, imm } => {
+                if *imm == -1 {
+                    Some((*rd, *rs1))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
 }
 
 impl LoweringTarget for RV32Arch {

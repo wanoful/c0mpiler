@@ -173,6 +173,7 @@ fn run_test_cases_with_reimu(escape_list: &[&str], case_path: &str, stop_at_faul
                 lower_function_bodies: true,
                 need_branch_relaxation: true,
                 optimize_fallthroughs: true,
+                optimize_peephole: true,
             });
             let machine_module = lowerer.lower_module(&module).expect("MIR lowering failed");
 

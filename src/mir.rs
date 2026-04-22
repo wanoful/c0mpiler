@@ -82,6 +82,8 @@ pub trait TargetInst {
     fn size_in_bytes(&self) -> usize;
 
     fn get_branch_target(&mut self) -> Option<&mut BlockId>;
+
+    fn as_move(&self) -> Option<(Register<Self::PhysicalReg>, Register<Self::PhysicalReg>)>;
 }
 
 pub trait LoweringTarget: TargetArch + Default {

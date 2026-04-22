@@ -100,6 +100,23 @@ impl<T: LoweringTarget> InterferenceGraph<T> {
 }
 
 impl<T: LoweringTarget> Lowerer<T> {
+    fn collect_move_pairs(
+        &self,
+        machine_function: &MachineFunction<T>,
+    ) -> HashMap<Register<T::PhysicalReg>, HashSet<Register<T::PhysicalReg>>> {
+        let mut move_pairs: HashMap<Register<T::PhysicalReg>, HashSet<Register<T::PhysicalReg>>> =
+            HashMap::new();
+        for block in machine_function.blocks.iter() {
+            for inst in block.instructions.iter() {
+                if let Some((src, dst)) = inst.as_move() {
+                    move_pairs.entry(src).or_default().insert(dst);
+                    move_pairs.entry(dst).or_default().insert(src);
+                }
+            }
+        }
+        move_pairs
+    }
+
     fn compute_spill(
         &self,
         machine_function: &MachineFunction<T>,
@@ -107,6 +124,7 @@ impl<T: LoweringTarget> Lowerer<T> {
         let liveness_info = self.liveness_analysis(machine_function);
 
         let graph = InterferenceGraph::build(machine_function, &liveness_info);
+        let move_pairs = self.collect_move_pairs(machine_function);
         let stack = graph.simplify();
 
         let mut assigned_regs: HashMap<VRegId, T::PhysicalReg> = HashMap::new();
@@ -125,7 +143,22 @@ impl<T: LoweringTarget> Lowerer<T> {
                 }
             }
 
-            if let Some(&reg) = available_regs.iter().next() {
+            let preferred = move_pairs
+                .get(&Register::Virtual(vreg_id))
+                .cloned()
+                .unwrap_or_default();
+            let preferred = preferred
+                .into_iter()
+                .filter_map(|r| match r {
+                    Register::Virtual(vreg_id) => assigned_regs.get(&vreg_id).copied(),
+                    Register::Physical(phy) => Some(phy),
+                })
+                .collect::<HashSet<_>>();
+            let mut preferred_available = available_regs.intersection(&preferred);
+
+            if let Some(&reg) = preferred_available.next() {
+                assigned_regs.insert(vreg_id, reg);
+            } else if let Some(&reg) = available_regs.iter().next() {
                 assigned_regs.insert(vreg_id, reg);
             } else {
                 spill_candidates.push(vreg_id);
