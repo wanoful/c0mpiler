@@ -178,10 +178,13 @@ impl ControlFlowGraph {
                     let mut runner = *pred;
                     while runner != dom_tree.idom[block] {
                         frontier.entry(runner).or_default().insert(*block);
-                        let Some(next) = dom_tree.idom.get(&runner) else {
+                        if let Some(next) = dom_tree.idom.get(&runner)
+                            && *next != runner
+                        {
+                            runner = *next;
+                        } else {
                             break;
-                        };
-                        runner = *next;
+                        }
                     }
                 }
             }

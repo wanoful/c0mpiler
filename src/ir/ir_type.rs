@@ -41,7 +41,7 @@ impl Type {
 pub struct IntType(pub u8);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FunctionType(pub Rc<Type>, pub Vec<Rc<Type>>);
+pub struct FunctionType{ pub return_type: Rc<Type>, pub param_types: Vec<Rc<Type>> }
 
 #[derive(Debug, Clone, Eq)]
 pub struct StructType {

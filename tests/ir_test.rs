@@ -169,6 +169,7 @@ fn run_test_cases(
                 },
             );
             generator.visit(&krate);
+            generator.opt_merge_return();
             generator.opt_mem2reg();
             generator.opt_dce();
             generator.print()

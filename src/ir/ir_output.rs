@@ -219,7 +219,7 @@ impl ModuleCore {
     fn ir_print_function(&self, func: FunctionId, helper: &mut PrintHelper) {
         let func_data = self.func(func);
         let func_ty = &func_data.ty;
-        let ret_ty = func_ty.0.as_function().unwrap().0.clone();
+        let ret_ty = func_ty.return_type.clone();
 
         helper.append_white(if func_data.is_declare {
             "declare"
@@ -247,8 +247,7 @@ impl ModuleCore {
                 arg_data.attrs.ir_print(helper);
                 helper.append(" ");
             }
-            let name =
-                helper.intern_core_value_name(ValueId::Arg(*arg), arg_data.name.clone());
+            let name = helper.intern_core_value_name(ValueId::Arg(*arg), arg_data.name.clone());
             helper.append(&format!("%{}", name));
         }
 
@@ -453,14 +452,7 @@ impl ModuleCore {
             }
             InstKind::Call { func, args } => {
                 helper.append_white("call");
-                self.func(*func)
-                    .ty
-                    .0
-                    .as_function()
-                    .unwrap()
-                    .0
-                    .as_ref()
-                    .ir_print(helper);
+                self.func(*func).ty.return_type.ir_print(helper);
                 helper.append(" ");
                 helper.append(&format!("@{}(", self.func(*func).name));
                 for (i, arg) in args.iter().enumerate() {
@@ -591,9 +583,9 @@ impl IRPrint for Type {
         match self {
             Type::Int(int_type) => helper.append(&format!("i{}", int_type.0)),
             Type::Function(function_type) => {
-                function_type.0.ir_print(helper);
+                function_type.return_type.ir_print(helper);
                 helper.append(" (");
-                function_type.1.ir_print(helper);
+                function_type.param_types.ir_print(helper);
                 helper.append(")");
             }
             Type::Ptr(_) => helper.append("ptr"),

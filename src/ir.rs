@@ -198,7 +198,10 @@ impl LLVMContextImpl {
     fn function_type(&mut self, ret_type: TypePtr, arg_tys: Vec<TypePtr>) -> FunctionTypePtr {
         FunctionTypePtr(
             self.ty_pool
-                .get_ty(&Type::Function(FunctionType(ret_type, arg_tys))),
+                .get_ty(&Type::Function(FunctionType {
+                    return_type: ret_type,
+                    param_types: arg_tys,
+                })),
         )
     }
 

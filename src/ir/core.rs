@@ -354,7 +354,7 @@ impl ModuleCore {
             self.func(func).args.is_empty(),
             "function arguments have already been initialized"
         );
-        let arg_tys = self.func(func).ty.0.as_function().unwrap().1.clone();
+        let arg_tys = self.func(func).ty.param_types.clone();
         arg_tys
             .into_iter()
             .map(|ty| self.append_arg(func, ty, None))
@@ -386,7 +386,11 @@ impl ModuleCore {
     }
 
     pub fn first_arg(&self, func: FunctionId) -> Option<ArgRef> {
-        self.func(func).args.keys().next().map(|arg| ArgRef { func, arg })
+        self.func(func)
+            .args
+            .keys()
+            .next()
+            .map(|arg| ArgRef { func, arg })
     }
 
     pub fn sret_type(&self, func: FunctionId) -> Option<TypePtr> {
@@ -504,30 +508,30 @@ impl ModuleCore {
 
     pub fn define_function_value(&mut self, name: String, ty: FunctionTypePtr) -> FunctionId {
         let func = self.define_function(name.clone(), ty.clone());
-        let global_ty: TypePtr = Rc::new(Type::Function(FunctionType(
-            ty.0.as_function().unwrap().0.clone(),
-            ty.0.as_function().unwrap().1.clone(),
-        )));
+        let global_ty: TypePtr = Rc::new(Type::Function(FunctionType {
+            return_type: ty.return_type.clone(),
+            param_types: ty.param_types.clone(),
+        }));
         self.add_global(name, global_ty, GlobalKind::Function(func));
         func
     }
 
     pub fn create_function_value(&mut self, name: String, ty: FunctionTypePtr) -> FunctionId {
         let func = self.create_function(name.clone(), ty.clone());
-        let global_ty: TypePtr = Rc::new(Type::Function(FunctionType(
-            ty.0.as_function().unwrap().0.clone(),
-            ty.0.as_function().unwrap().1.clone(),
-        )));
+        let global_ty: TypePtr = Rc::new(Type::Function(FunctionType {
+            return_type: ty.return_type.clone(),
+            param_types: ty.param_types.clone(),
+        }));
         self.add_global(name, global_ty, GlobalKind::Function(func));
         func
     }
 
     pub fn declare_function_value(&mut self, name: String, ty: FunctionTypePtr) -> FunctionId {
         let func = self.declare_function(name.clone(), ty.clone());
-        let global_ty: TypePtr = Rc::new(Type::Function(FunctionType(
-            ty.0.as_function().unwrap().0.clone(),
-            ty.0.as_function().unwrap().1.clone(),
-        )));
+        let global_ty: TypePtr = Rc::new(Type::Function(FunctionType {
+            return_type: ty.return_type.clone(),
+            param_types: ty.param_types.clone(),
+        }));
         self.add_global(name, global_ty, GlobalKind::Function(func));
         func
     }
@@ -707,7 +711,9 @@ impl ModuleCore {
     }
 
     fn detach_inst(&mut self, inst: InstRef) {
-        let parent = self.inst(inst).parent.unwrap();
+        let Some(parent) = self.inst(inst).parent else {
+            return;
+        };
 
         match self.locate_inst(inst) {
             InstPosition::Inst(pos) => {
@@ -723,9 +729,10 @@ impl ModuleCore {
     }
 
     pub(crate) fn erase_inst_from_parent_forcely(&mut self, inst: InstRef) {
-        let value  = ValueId::Inst(inst);
+        let value = ValueId::Inst(inst);
         for Use { user, slot } in self.value_uses(value).to_vec() {
-            let undefined_constant = ValueId::Const(self.add_undef_const(self.value_ty(value).clone()));
+            let undefined_constant =
+                ValueId::Const(self.add_undef_const(self.value_ty(value).clone()));
             self.replace_inst_operand(user, slot, undefined_constant);
         }
 
@@ -761,6 +768,61 @@ impl ModuleCore {
                 uses.remove(pos);
             }
         });
+    }
+
+    fn replace_inst(&mut self, old: InstRef, new: InstRef) {
+        assert_eq!(
+            old.func, new.func,
+            "The instructions must belong to the same function"
+        );
+        assert!(
+            self.inst(old).parent.is_some(),
+            "The old instruction must have a parent block"
+        );
+        assert!(
+            self.inst(new).parent.is_none(),
+            "The new instruction must not have a parent block"
+        );
+        assert!(
+            self.inst(old).ty == self.inst(new).ty,
+            "The instructions must have the same type"
+        );
+
+        let parent = self.inst(old).parent.unwrap();
+        let position = self.locate_inst(old);
+
+        match position {
+            InstPosition::Inst(pos) => {
+                assert!(
+                    !self.inst(new).kind.is_phi() && !self.inst(new).kind.is_terminator(),
+                    "Cannot replace a non-phi, non-terminator instruction with a phi or terminator instruction"
+                );
+                self.block_mut(parent).insts[pos] = new.inst;
+            }
+            InstPosition::Phi(pos) => {
+                assert!(
+                    self.inst(new).kind.is_phi(),
+                    "Cannot replace a phi instruction with a non-phi instruction"
+                );
+                self.block_mut(parent).phis[pos] = new.inst;
+            }
+            InstPosition::Terminator => {
+                assert!(
+                    self.inst(new).kind.is_terminator(),
+                    "Cannot replace a terminator instruction with a non-terminator instruction"
+                );
+                self.block_mut(parent).terminator = Some(new.inst);
+            }
+        }
+
+        self.inst_mut(new).parent = Some(parent);
+        self.inst_mut(old).parent = None;
+        self.replace_all_uses_with(ValueId::Inst(old), ValueId::Inst(new));
+    }
+
+    pub(crate) fn overwrite_inst(&mut self, old: InstRef, new: InstRef) {
+        self.replace_inst(old, new);
+        self.erase_inst_from_parent(old);
     }
 
     pub(crate) fn replace_inst_operand(

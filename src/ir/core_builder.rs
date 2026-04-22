@@ -176,7 +176,7 @@ impl<'a> IRBuilder<'a> {
         args: Vec<ValueId>,
         name: Option<&str>,
     ) -> InstRef {
-        let ret_ty = self.module.func(func).ty.0.as_function().unwrap().0.clone();
+        let ret_ty = self.module.func(func).ty.return_type.clone();
         self.build_inst(ret_ty, InstKind::Call { func, args }, name)
     }
 
@@ -363,15 +363,15 @@ impl CursorBuilder {
     }
 
     fn memcpy_ty() -> TypePtr {
-        Rc::new(Type::Function(FunctionType(
-            Self::void_ty(),
-            vec![
+        Rc::new(Type::Function(FunctionType {
+            return_type: Self::void_ty(),
+            param_types: vec![
                 Self::ptr_ty(),
                 Self::ptr_ty(),
                 Self::i32_ty(),
                 Self::i1_ty(),
             ],
-        )))
+        }))
     }
 
     fn insert_inst(&mut self, inst: InstRef) {
@@ -476,16 +476,7 @@ impl CursorBuilder {
         args: Vec<ValueId>,
         name: Option<&str>,
     ) -> InstRef {
-        let ret_ty = self
-            .module
-            .borrow()
-            .func(func)
-            .ty
-            .0
-            .as_function()
-            .unwrap()
-            .0
-            .clone();
+        let ret_ty = self.module.borrow().func(func).ty.return_type.clone();
         self.build_inst(ret_ty, InstKind::Call { func, args }, name)
     }
 
@@ -685,10 +676,17 @@ impl CursorBuilder {
         if let Some(func) = self.module.borrow().get_function(name) {
             return Ok(func);
         }
-        let Type::Function(FunctionType(ret, args)) = ty.as_ref() else {
+        let Type::Function(FunctionType {
+            return_type,
+            param_types,
+        }) = ty.as_ref()
+        else {
             return Err(ty);
         };
-        let func_ty: TypePtr = Rc::new(Type::Function(FunctionType(ret.clone(), args.clone())));
+        let func_ty: TypePtr = Rc::new(Type::Function(FunctionType {
+            return_type: return_type.clone(),
+            param_types: param_types.clone(),
+        }));
         Ok(self
             .module
             .borrow_mut()

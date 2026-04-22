@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use crate::ir::{
-    core::{FunctionId, InstData, InstId, InstRef, ModuleCore, Use, ValueId},
+    core::{FunctionId, InstData, InstId, InstRef, ModuleCore, ValueId},
     core_inst::InstKind,
 };
 
