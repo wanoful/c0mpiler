@@ -1,41 +1,73 @@
 use std::collections::{HashMap, HashSet};
 
+use enum_as_inner::EnumAsInner;
+
 use crate::ir::{
     core::{BlockId, FunctionId, ModuleCore},
     core_inst::CondBranch,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumAsInner)]
+pub(super) enum CFGNode {
+    Block(BlockId),
+    Fake,
+}
+
+impl From<BlockId> for CFGNode {
+    fn from(value: BlockId) -> Self {
+        CFGNode::Block(value)
+    }
+}
+
+pub(super) struct DFSResult {
+    pub(super) order: Vec<CFGNode>,
+    pub(super) dfn: HashMap<CFGNode, usize>,
+    pub(super) parent: HashMap<CFGNode, CFGNode>,
+}
+
+#[derive(Debug)]
 pub(super) struct ControlFlowGraph {
-    pub(super) entry: BlockId,
-    pub(super) succs: HashMap<BlockId, HashSet<BlockId>>,
-    pub(super) preds: HashMap<BlockId, HashSet<BlockId>>,
+    pub(super) entry: CFGNode,
+    pub(super) succs: HashMap<CFGNode, HashSet<CFGNode>>,
+    pub(super) preds: HashMap<CFGNode, HashSet<CFGNode>>,
 }
 
 pub(super) struct DominatorTree {
-    pub(super) root: BlockId,
-    pub(super) children: HashMap<BlockId, HashSet<BlockId>>,
-    pub(super) idom: HashMap<BlockId, BlockId>,
+    pub(super) root: CFGNode,
+    pub(super) children: HashMap<CFGNode, HashSet<CFGNode>>,
+    pub(super) idom: HashMap<CFGNode, CFGNode>,
 }
 
 impl ControlFlowGraph {
-    fn build_dfn(
-        &self,
-    ) -> (
-        Vec<BlockId>,
-        HashMap<BlockId, usize>,
-        HashMap<BlockId, BlockId>,
-    ) {
+    pub(super) fn reverse(&mut self, ends: HashSet<BlockId>) {
+        std::mem::swap(&mut self.succs, &mut self.preds);
+        self.entry = CFGNode::Fake;
+        self.succs.entry(self.entry).or_default();
+        self.preds.entry(self.entry).or_default();
+        for end in ends {
+            self.succs
+                .entry(CFGNode::Fake)
+                .or_default()
+                .insert(CFGNode::Block(end));
+            self.preds
+                .entry(CFGNode::Block(end))
+                .or_default()
+                .insert(CFGNode::Fake);
+        }
+    }
+
+    pub(super) fn build_dfn(&self) -> DFSResult {
         let mut visited = HashSet::new();
         let mut order = Vec::new();
         let mut parent = HashMap::new();
 
         fn dfs_visit(
             cfg: &ControlFlowGraph,
-            visited: &mut HashSet<BlockId>,
-            order: &mut Vec<BlockId>,
-            parent: &mut HashMap<BlockId, BlockId>,
-            block: BlockId,
-            from: Option<BlockId>,
+            visited: &mut HashSet<CFGNode>,
+            order: &mut Vec<CFGNode>,
+            parent: &mut HashMap<CFGNode, CFGNode>,
+            block: CFGNode,
+            from: Option<CFGNode>,
         ) {
             if visited.contains(&block) {
                 return;
@@ -58,17 +90,21 @@ impl ControlFlowGraph {
             self.entry,
             None,
         );
-        let dfn: HashMap<BlockId, usize> = order
+        let dfn: HashMap<CFGNode, usize> = order
             .iter()
             .enumerate()
             .map(|(i, block)| (*block, i))
             .collect();
 
-        (order, dfn, parent)
+        DFSResult { order, dfn, parent }
     }
 
     pub(super) fn build_dom_tree(&self) -> DominatorTree {
-        let (dfs_order, dfn, dfs_parent) = self.build_dfn();
+        let DFSResult {
+            order: dfs_order,
+            dfn,
+            parent: dfs_parent,
+        } = self.build_dfn();
         assert!(
             !dfs_order.is_empty(),
             "CFG entry is unreachable from itself"
@@ -81,15 +117,15 @@ impl ControlFlowGraph {
         let mut idom = sdom.clone();
         let mut disjoint_set = sdom.clone();
         let mut best = sdom.clone();
-        let mut bucket: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
+        let mut bucket: HashMap<CFGNode, HashSet<CFGNode>> = HashMap::new();
 
         fn find(
-            v: BlockId,
-            disjoint_set: &mut HashMap<BlockId, BlockId>,
-            dfn: &HashMap<BlockId, usize>,
-            sdom: &HashMap<BlockId, BlockId>,
-            best: &mut HashMap<BlockId, BlockId>,
-        ) -> BlockId {
+            v: CFGNode,
+            disjoint_set: &mut HashMap<CFGNode, CFGNode>,
+            dfn: &HashMap<CFGNode, usize>,
+            sdom: &HashMap<CFGNode, CFGNode>,
+            best: &mut HashMap<CFGNode, CFGNode>,
+        ) -> CFGNode {
             let parent = disjoint_set[&v];
             if parent != v {
                 let root = find(parent, disjoint_set, dfn, sdom, best);
@@ -104,7 +140,7 @@ impl ControlFlowGraph {
             }
         }
 
-        fn link(parent: BlockId, child: BlockId, disjoint_set: &mut HashMap<BlockId, BlockId>) {
+        fn link(parent: CFGNode, child: CFGNode, disjoint_set: &mut HashMap<CFGNode, CFGNode>) {
             disjoint_set.insert(child, parent);
         }
 
@@ -148,7 +184,7 @@ impl ControlFlowGraph {
 
         idom.insert(self.entry, self.entry);
 
-        let mut children: HashMap<BlockId, HashSet<BlockId>> =
+        let mut children: HashMap<CFGNode, HashSet<CFGNode>> =
             idom.keys().map(|&block| (block, HashSet::new())).collect();
         for (&node, &idom_node) in &idom {
             if node != idom_node {
@@ -166,8 +202,8 @@ impl ControlFlowGraph {
     pub(super) fn build_dom_frontier(
         &self,
         dom_tree: &DominatorTree,
-    ) -> HashMap<BlockId, HashSet<BlockId>> {
-        let mut frontier: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
+    ) -> HashMap<CFGNode, HashSet<CFGNode>> {
+        let mut frontier: HashMap<CFGNode, HashSet<CFGNode>> = HashMap::new();
 
         for block in dom_tree.idom.keys() {
             if self.preds[block].len() >= 2 {
@@ -194,25 +230,50 @@ impl ControlFlowGraph {
     }
 }
 
+impl DominatorTree {
+    pub(super) fn dominates(&self, a: CFGNode, b: CFGNode) -> bool {
+        if a == self.root {
+            return true;
+        }
+
+        let mut current = b;
+        while current != self.root {
+            if current == a {
+                return true;
+            }
+            current = *self.idom.get(&current).unwrap_or_else(|| {
+                panic!(
+                    "Node {:?} is not reachable from the entry, and entry is {:?}",
+                    current, self.root
+                )
+            });
+        }
+        false
+    }
+}
+
 impl ModuleCore {
     pub(super) fn build_cfg(&self, function: FunctionId) -> ControlFlowGraph {
-        let mut succs: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
-        let mut preds: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
+        let mut succs: HashMap<CFGNode, HashSet<CFGNode>> = HashMap::new();
+        let mut preds: HashMap<CFGNode, HashSet<CFGNode>> = HashMap::new();
 
         let func = self.func(function);
 
-        let entry = func.entry;
+        let entry = CFGNode::Block(func.entry);
 
         for (block_id, data) in &func.blocks {
+            let block_id = CFGNode::Block(block_id);
             succs.entry(block_id).or_default();
             preds.entry(block_id).or_default();
 
             if let Some(term) = data.terminator {
                 match func.insts[term].kind {
                     super::core_inst::InstKind::Branch { then_block, cond } => {
+                        let then_block = CFGNode::Block(then_block);
                         succs.entry(block_id).or_default().insert(then_block);
                         preds.entry(then_block).or_default().insert(block_id);
                         if let Some(CondBranch { else_block, .. }) = cond {
+                            let else_block = CFGNode::Block(else_block);
                             succs.entry(block_id).or_default().insert(else_block);
                             preds.entry(else_block).or_default().insert(block_id);
                         }

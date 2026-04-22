@@ -163,7 +163,7 @@ fn run_test_cases_with_reimu(escape_list: &[&str], case_path: &str, stop_at_faul
             generator.visit(&krate);
             generator.opt_merge_return();
             generator.opt_mem2reg();
-            generator.opt_dce();
+            generator.opt_adce();
 
             ir_time = sub_timer.elapsed();
 

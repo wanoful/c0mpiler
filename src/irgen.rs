@@ -5,7 +5,7 @@ pub mod ty;
 pub mod value;
 pub mod visitor;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::{
     cell::{Ref, RefCell},
     rc::Rc,
@@ -42,6 +42,8 @@ pub struct IRGenerator<'ast, 'analyzer> {
     pub(crate) value_indexes: HashMap<ValueIndex, ValuePtrContainer>,
     pub(crate) core_value_indexes: HashMap<ValueIndex, CoreValueContainer>,
     pub(crate) core_expr_values: HashMap<NodeId, CoreValueContainer>,
+
+    pub(crate) visited_impls: HashSet<(TypeKey, Option<TypeKey>)>,
 }
 
 impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
@@ -70,6 +72,7 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
             value_indexes,
             core_value_indexes,
             core_expr_values,
+            visited_impls: HashSet::new(),
         };
 
         generator.add_struct_type();
@@ -390,6 +393,12 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
 
     pub fn opt_dce(&mut self) {
         self.core_module.borrow_mut().opt_dead_code_elimination();
+    }
+
+    pub fn opt_adce(&mut self) {
+        self.core_module
+            .borrow_mut()
+            .opt_aggressive_dead_code_elimination();
     }
 
     pub fn opt_merge_return(&mut self) {

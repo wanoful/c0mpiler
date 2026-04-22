@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::{
-    cfg::DominatorTree,
+    cfg::{CFGNode, DominatorTree},
     core::{BlockId, BlockRef, FunctionId, InstId, InstRef, ModuleCore, Use, ValueId},
     core_inst::{InstKind, OperandSlot},
 };
@@ -47,12 +47,12 @@ impl ModuleCore {
         let mut phi_mappings = HashMap::new();
 
         for (alloca, defs, ty) in allocas.iter() {
-            let mut work_list: Vec<BlockId> = defs
+            let mut work_list: Vec<CFGNode> = defs
                 .iter()
-                .map(|i| self.func(id).insts[i.inst].parent.unwrap().block)
+                .map(|i| self.func(id).insts[i.inst].parent.unwrap().block.into())
                 .collect();
-            let mut phi_inserted: HashSet<BlockId> = HashSet::new();
-            let mut worked: HashSet<BlockId> = HashSet::from_iter(work_list.clone());
+            let mut phi_inserted: HashSet<CFGNode> = HashSet::new();
+            let mut worked: HashSet<CFGNode> = HashSet::from_iter(work_list.clone());
 
             while let Some(block_id) = work_list.pop() {
                 let Some(frontier) = dom_frontiers.get(&block_id) else {
@@ -69,7 +69,13 @@ impl ModuleCore {
                             None,
                         );
                         phi_mappings.insert(phi_inst.inst, *alloca);
-                        self.append_phi(BlockRef { func: id, block: f }, phi_inst);
+                        self.append_phi(
+                            BlockRef {
+                                func: id,
+                                block: f.into_block().unwrap(),
+                            },
+                            phi_inst,
+                        );
 
                         if worked.insert(f) {
                             work_list.push(f);
@@ -201,11 +207,11 @@ impl ModuleCore {
             }
         }
 
-        for &child in dom_tree.children[&current_block.block].iter() {
+        for &child in dom_tree.children[&current_block.block.into()].iter() {
             self.mem2reg_rename_stage(
                 BlockRef {
                     func: current_block.func,
-                    block: child,
+                    block: child.into_block().unwrap(),
                 },
                 stacks,
                 dom_tree,
