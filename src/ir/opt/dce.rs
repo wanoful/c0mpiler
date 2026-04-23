@@ -220,8 +220,8 @@ impl ModuleCore {
             });
 
             // Phi 的控制依赖也需要保活
-            if let InstKind::Phi { incomings } = &inst.kind {
-                for PhiIncoming { block, .. } in incomings {
+            if let InstKind::Phi { incomings, .. } = &inst.kind {
+                for PhiIncoming { block, .. } in incomings.values() {
                     let block = &function.blocks[*block];
                     if let Some(term) = block.terminator {
                         if !live_insts.contains(&term) {

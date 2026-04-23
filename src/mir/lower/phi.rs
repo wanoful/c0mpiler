@@ -52,8 +52,8 @@ impl<T: LoweringTarget> Lowerer<T> {
                 .map(|phi| {
                     let inst = module.inst(phi);
                     let incomings = match &inst.kind {
-                        InstKind::Phi { incomings } => incomings
-                            .iter()
+                        InstKind::Phi { incomings, .. } => incomings
+                            .values()
                             .map(|incoming| {
                                 let pred_block = BlockRef {
                                     func: block.func,

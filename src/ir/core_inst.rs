@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use enum_as_inner::EnumAsInner;
 
 use crate::ir::{
@@ -75,7 +77,8 @@ pub enum InstKind {
         rhs: ValueId,
     },
     Phi {
-        incomings: Vec<PhiIncoming>,
+        incomings: HashMap<usize, PhiIncoming>,
+        idx: usize,
     },
     Select {
         cond: ValueId,
@@ -159,10 +162,9 @@ impl InstKind {
                     f(cond.else_block, BlockOperandSlot::BranchElse);
                 }
             }
-            InstKind::Phi { incomings } => incomings
+            InstKind::Phi { incomings,.. } => incomings
                 .iter()
-                .enumerate()
-                .for_each(|(i, incoming)| f(incoming.block, BlockOperandSlot::PhiIncomingBlock(i))),
+                .for_each(|(i, incoming)| f(incoming.block, BlockOperandSlot::PhiIncomingBlock(*i))),
             _ => {}
         }
     }
@@ -204,10 +206,9 @@ impl InstKind {
                 f(*lhs, OperandSlot::ICmpLhs);
                 f(*rhs, OperandSlot::ICmpRhs);
             }
-            InstKind::Phi { incomings } => incomings
+            InstKind::Phi { incomings,.. } => incomings
                 .iter()
-                .enumerate()
-                .for_each(|(i, incoming)| f(incoming.value, OperandSlot::PhiIncomingVal(i))),
+                .for_each(|(i, incoming)| f(incoming.value, OperandSlot::PhiIncomingVal(*i))),
             InstKind::Select {
                 cond,
                 then_val,
@@ -232,7 +233,7 @@ impl InstKind {
                 &mut cond.else_block
             }
             (InstKind::Phi { incomings, .. }, BlockOperandSlot::PhiIncomingBlock(i)) => {
-                &mut incomings[i].block
+                &mut incomings.get_mut(&i).unwrap().block
             }
             _ => panic!("Invalid block operand slot for instruction kind"),
         };
@@ -261,7 +262,7 @@ impl InstKind {
             (InstKind::ICmp { lhs, .. }, OperandSlot::ICmpLhs) => lhs,
             (InstKind::ICmp { rhs, .. }, OperandSlot::ICmpRhs) => rhs,
             (InstKind::Phi { incomings, .. }, OperandSlot::PhiIncomingVal(i)) => {
-                &mut incomings[i].value
+                &mut incomings.get_mut(&i).unwrap().value
             }
             (InstKind::Select { cond, .. }, OperandSlot::SelectCond) => cond,
             (InstKind::Select { then_val, .. }, OperandSlot::SelectThenVal) => then_val,

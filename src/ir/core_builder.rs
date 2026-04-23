@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::ir::{
     core::{BlockRef, FunctionId, InstRef, ModuleCore, ValueId},
@@ -187,17 +187,18 @@ impl<'a> IRBuilder<'a> {
         name: Option<&str>,
     ) -> InstRef {
         let func = self.current_func();
-        let incomings = incomings
-            .into_iter()
-            .map(|(value, block)| {
+        let incomings: HashMap<usize, PhiIncoming> = incomings
+            .into_iter().enumerate()
+            .map(|(idx, (value, block))| {
                 assert_eq!(block.func, func);
-                PhiIncoming {
+                (idx, PhiIncoming {
                     block: block.block,
                     value,
-                }
+                })
             })
             .collect();
-        self.build_inst(ty, InstKind::Phi { incomings }, name)
+        let idx = incomings.len();
+        self.build_inst(ty, InstKind::Phi { incomings, idx }, name)
     }
 
     pub fn build_select(
@@ -501,17 +502,18 @@ impl CursorBuilder {
         name: Option<&str>,
     ) -> InstRef {
         let func = self.get_current_function();
-        let incomings = incomings
-            .into_iter()
-            .map(|(value, block)| {
+        let incomings: HashMap<usize, PhiIncoming> = incomings
+            .into_iter().enumerate()
+            .map(|(idx, (value, block))| {
                 assert_eq!(block.func, func);
-                PhiIncoming {
+                (idx, PhiIncoming {
                     block: block.block,
                     value,
-                }
+                })
             })
             .collect();
-        self.build_inst(ty, InstKind::Phi { incomings }, name)
+        let idx = incomings.len();
+        self.build_inst(ty, InstKind::Phi { incomings, idx }, name)
     }
 
     pub fn build_select(

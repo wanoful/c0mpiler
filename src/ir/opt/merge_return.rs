@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{collections::HashMap, rc::Rc};
 
 use crate::ir::{
     core::{FunctionId, InstRef, ModuleCore, ValueId},
@@ -42,20 +42,21 @@ impl ModuleCore {
 
         if !ty.is_void() {
             let incomings = return_insts
-                .iter()
-                .map(|&inst_id| {
+                .iter().enumerate()
+                .map(|(i, &inst_id)| {
                     let ret_inst = &function.insts[inst_id];
                     if let InstKind::Ret { value: Some(v) } = &ret_inst.kind {
-                        PhiIncoming {
+                        (i, PhiIncoming {
                             block: ret_inst.parent.unwrap().block,
                             value: *v,
-                        }
+                        })
                     } else {
                         panic!("Return instruction has no return value!  But the function return type is {:?}\n And the function type is {:?}", ty, function.ty);
                     }
                 })
-                .collect::<Vec<_>>();
-            let phi = self.new_inst(id, ty, InstKind::Phi { incomings }, None);
+                .collect::<HashMap<_,_>>();
+            let idx = incomings.len();
+            let phi = self.new_inst(id, ty, InstKind::Phi { incomings, idx }, None);
             self.append_phi(new_block, phi);
             let ret = self.new_inst(
                 id,

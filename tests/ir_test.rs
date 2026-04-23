@@ -186,8 +186,8 @@ fn run_test_cases(
             generator.opt_mem2reg();
             generator.opt_sccp();
             generator.opt_cfg_simplify();
-            generator.opt_adce();
-            generator.opt_cfg_simplify();
+            // generator.opt_adce();
+            // generator.opt_cfg_simplify();
             generator.print()
         })) {
             Ok(ir) => ir,

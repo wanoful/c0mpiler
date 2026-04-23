@@ -484,13 +484,18 @@ impl ModuleCore {
                     self.ir_print_typed_value(*index, helper);
                 }
             }
-            InstKind::Phi { incomings } => {
+            InstKind::Phi { incomings,.. } => {
                 helper.append_white("phi");
                 inst_data.ty.as_ref().ir_print(helper);
                 helper.append(" ");
-                for (i, incoming) in incomings.iter().enumerate() {
-                    if i > 0 {
+                let mut incomings = incomings.iter().collect::<Vec<_>>();
+                incomings.sort_by_key(|(i, _)| *i);
+                let mut first = true;
+                for (_, incoming) in incomings {
+                    if !first {
                         helper.append(", ");
+                    } else {
+                        first = false;
                     }
                     helper.append("[ ");
                     self.ir_print_value(incoming.value, helper);

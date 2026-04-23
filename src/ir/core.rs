@@ -609,10 +609,6 @@ impl ModuleCore {
     pub(crate) fn append_inst(&mut self, block: BlockRef, inst: InstRef) {
         self.assert_can_insert(block, inst);
         assert!(!self.inst(inst).kind.is_phi() && !self.inst(inst).kind.is_terminator());
-        assert!(
-            self.block(block).terminator.is_none(),
-            "Cannot append instructions after a terminator"
-        );
         self.block_mut(block).insts.push(inst.inst);
         self.inst_mut(inst).parent = Some(block);
         self.register_inst_use(inst);
@@ -733,7 +729,9 @@ impl ModuleCore {
         }
     }
 
-    fn detach_inst(&mut self, inst: InstRef) {
+    pub(crate) fn detach_inst(&mut self, inst: InstRef) {
+        self.unregister_inst_use(inst);
+
         let Some(parent) = self.inst(inst).parent else {
             return;
         };
@@ -768,8 +766,6 @@ impl ModuleCore {
             self.value_uses(value).is_empty(),
             "Cannot erase the instruction because it is still used",
         );
-
-        self.unregister_inst_use(inst);
 
         self.detach_inst(inst);
 
@@ -956,17 +952,18 @@ impl ModuleCore {
     pub(crate) fn phi_add_incoming(&mut self, phi: InstRef, block: BlockRef, value: ValueId) {
         assert_eq!(phi.func, block.func);
         match &mut self.inst_mut(phi).kind {
-            InstKind::Phi { incomings } => {
-                let idx = incomings.len();
-                let slot = OperandSlot::PhiIncomingVal(idx);
-                incomings.push(PhiIncoming {
+            InstKind::Phi { incomings, idx } => {
+                let slot = OperandSlot::PhiIncomingVal(*idx);
+                let block_slot = BlockOperandSlot::PhiIncomingBlock(*idx);
+                incomings.insert(*idx, PhiIncoming {
                     block: block.block,
                     value,
                 });
+                *idx += 1;
                 self.value_uses_mut(value).push(Use { user: phi, slot });
                 self.block_uses_mut(block).push(BlockUse {
                     user: phi,
-                    slot: BlockOperandSlot::PhiIncomingBlock(idx),
+                    slot: block_slot,
                 });
             }
             _ => panic!("Expected a phi instruction"),
@@ -975,12 +972,10 @@ impl ModuleCore {
 
     pub(crate) fn phi_remove_incoming_from(&mut self, phi: InstRef, incoming_index: usize) {
         match &mut self.inst_mut(phi).kind {
-            InstKind::Phi { incomings } => {
-                let value = incomings[incoming_index].value;
-                let block = incomings[incoming_index].block;
-                incomings.remove(incoming_index);
-
-                let cloned = incomings.clone();
+            InstKind::Phi { incomings,.. } => {
+                let value = incomings[&incoming_index].value;
+                let block = incomings[&incoming_index].block;
+                incomings.remove(&incoming_index);
 
                 self.value_uses_mut(value).retain(|u| {
                     !(u.user == phi && u.slot == OperandSlot::PhiIncomingVal(incoming_index))
@@ -992,16 +987,6 @@ impl ModuleCore {
                 .retain(|u| {
                     !(u.user == phi && u.slot == BlockOperandSlot::PhiIncomingBlock(incoming_index))
                 });
-
-                for (i, PhiIncoming { value: id, .. }) in
-                    cloned.iter().enumerate().skip(incoming_index)
-                {
-                    self.value_uses_mut(*id)
-                        .iter_mut()
-                        .find(|u| u.user == phi && u.slot == OperandSlot::PhiIncomingVal(i + 1))
-                        .unwrap()
-                        .slot = OperandSlot::PhiIncomingVal(i);
-                }
             }
             _ => panic!("Expected a phi instruction"),
         }

@@ -145,9 +145,9 @@ impl ModuleCore {
         let old_state = self.get_value_state(ValueId::Inst(inst), value_states);
 
         let inst_data = self.inst(inst);
-        let incomings = inst_data.kind.as_phi().unwrap();
+        let incomings = inst_data.kind.as_phi().unwrap().0;
         let new_state = incomings
-            .iter()
+            .values()
             .filter_map(|PhiIncoming { block, value }| {
                 if visited_blocks.contains(block) {
                     Some(value)

@@ -64,7 +64,8 @@ impl ModuleCore {
                             id,
                             ty.clone(),
                             InstKind::Phi {
-                                incomings: Vec::new(),
+                                incomings: HashMap::new(),
+                                idx: 0,
                             },
                             None,
                         );
