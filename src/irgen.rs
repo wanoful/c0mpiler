@@ -401,6 +401,10 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
             .opt_aggressive_dead_code_elimination();
     }
 
+    pub fn opt_sccp(&mut self) {
+        self.core_module.borrow_mut().opt_sparse_conditional_constant_propagation();
+    }
+
     pub fn opt_merge_return(&mut self) {
         self.core_module.borrow_mut().opt_merge_return();
     }

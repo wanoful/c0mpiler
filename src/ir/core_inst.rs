@@ -1,3 +1,5 @@
+use enum_as_inner::EnumAsInner;
+
 use crate::ir::{
     core::{BlockId, FunctionId, ValueId},
     ir_type::TypePtr,
@@ -27,7 +29,7 @@ pub enum OperandSlot {
     SextVal,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, EnumAsInner)]
 pub enum InstKind {
     Binary {
         op: BinaryOpcode,
@@ -94,10 +96,6 @@ impl InstKind {
             self,
             InstKind::Branch { .. } | InstKind::Ret { .. } | InstKind::Unreachable
         )
-    }
-
-    pub fn is_phi(&self) -> bool {
-        matches!(self, InstKind::Phi { .. })
     }
 }
 

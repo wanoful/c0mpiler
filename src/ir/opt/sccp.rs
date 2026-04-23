@@ -1,0 +1,364 @@
+use std::{
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
+
+use crate::ir::{
+    core::{BlockId, ConstId, FunctionId, InstRef, ModuleCore, Use, ValueId},
+    core_inst::{BinaryOpcode, CondBranch, ICmpCode, InstKind, PhiIncoming},
+    core_value::{ConstKind, GlobalKind},
+    ir_type::{Type, VoidType},
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ValueState {
+    Unknown,
+    Constant(i64),
+    Overdefined,
+}
+
+impl ValueState {
+    fn merge(&self, other: &ValueState, merge_fn: impl Fn(i64, i64) -> Option<i64>) -> ValueState {
+        match (self, other) {
+            (ValueState::Unknown, ValueState::Unknown) => ValueState::Unknown,
+            (ValueState::Constant(c1), ValueState::Constant(c2)) => {
+                merge_fn(*c1, *c2).map_or(ValueState::Overdefined, ValueState::Constant)
+            }
+            _ => ValueState::Overdefined,
+        }
+    }
+}
+
+impl PartialOrd for ValueState {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        use ValueState::*;
+        match (self, other) {
+            (Unknown, Unknown) | (Constant(_), Constant(_)) | (Overdefined, Overdefined) => {
+                Some(std::cmp::Ordering::Equal)
+            }
+            (Unknown, _) => Some(std::cmp::Ordering::Less),
+            (_, Unknown) => Some(std::cmp::Ordering::Greater),
+            (Constant(_), Overdefined) => Some(std::cmp::Ordering::Less),
+            (Overdefined, Constant(_)) => Some(std::cmp::Ordering::Greater),
+        }
+    }
+}
+
+impl ModuleCore {
+    pub fn opt_sparse_conditional_constant_propagation(&mut self) {
+        for id in self.functions_in_order() {
+            self.func_sparse_conditional_constant_propagation(id);
+        }
+    }
+
+    fn func_sparse_conditional_constant_propagation(&mut self, id: FunctionId) {
+        let function = self.func(id);
+        if function.is_declare {
+            return;
+        }
+
+        let mut value_states: HashMap<InstRef, ValueState> = HashMap::new();
+        let mut cfg_work_list = vec![function.entry];
+        let mut inst_work_list = Vec::new();
+        let mut visited_block: HashSet<_> = HashSet::new();
+
+        while !cfg_work_list.is_empty() || !inst_work_list.is_empty() {
+            while let Some(block) = cfg_work_list.pop() {
+                if !visited_block.insert(block) {
+                    continue;
+                }
+
+                self.func(id).blocks[block]
+                    .phis
+                    .clone()
+                    .into_iter()
+                    .for_each(|inst| {
+                        self.visit_phi_inst(
+                            InstRef {
+                                inst: inst,
+                                func: id,
+                            },
+                            &mut value_states,
+                            &mut inst_work_list,
+                            &visited_block,
+                        );
+                    });
+
+                self.func(id).blocks[block]
+                    .insts
+                    .clone()
+                    .into_iter()
+                    .for_each(|inst| {
+                        self.visit_normal_inst(
+                            InstRef {
+                                inst: inst,
+                                func: id,
+                            },
+                            &mut value_states,
+                            &mut inst_work_list,
+                        );
+                    });
+
+                if let Some(term_inst) = self.func(id).blocks[block].terminator {
+                    self.visit_term_inst(
+                        InstRef {
+                            inst: term_inst,
+                            func: id,
+                        },
+                        &mut value_states,
+                        &mut cfg_work_list,
+                    );
+                }
+            }
+
+            while let Some(inst_ref) = inst_work_list.pop() {
+                let data = self.inst(inst_ref);
+
+                if data.kind.is_phi() {
+                    self.visit_phi_inst(
+                        inst_ref,
+                        &mut value_states,
+                        &mut inst_work_list,
+                        &visited_block,
+                    );
+                } else if data.kind.is_terminator() {
+                    self.visit_term_inst(inst_ref, &mut value_states, &mut cfg_work_list);
+                } else {
+                    self.visit_normal_inst(inst_ref, &mut value_states, &mut inst_work_list);
+                }
+            }
+        }
+    }
+
+    fn visit_phi_inst(
+        &mut self,
+        inst: InstRef,
+        value_states: &mut HashMap<InstRef, ValueState>,
+        inst_work_list: &mut Vec<InstRef>,
+        visited_blocks: &HashSet<BlockId>,
+    ) {
+        let old_state = self.get_value_state(ValueId::Inst(inst), value_states);
+
+        let inst_data = self.inst(inst);
+        let incomings = inst_data.kind.as_phi().unwrap();
+        let new_state = incomings
+            .iter()
+            .filter_map(|PhiIncoming { block, value }| {
+                if visited_blocks.contains(block) {
+                    Some(value)
+                } else {
+                    None
+                }
+            })
+            .fold(ValueState::Unknown, |acc, value| {
+                acc.merge(&self.get_value_state(*value, value_states), |c1, c2| {
+                    if c1 == c2 { Some(c1) } else { None }
+                })
+            });
+
+        self.apply_value_state_change(inst, inst_work_list, old_state, new_state, value_states);
+    }
+
+    fn apply_value_state_change(
+        &mut self,
+        inst: InstRef,
+        inst_work_list: &mut Vec<InstRef>,
+        old_state: ValueState,
+        new_state: ValueState,
+        value_states: &mut HashMap<InstRef, ValueState>,
+    ) {
+        if old_state != new_state {
+            if let ValueState::Constant(c) = new_state {
+                let ty = self.value_ty(ValueId::Inst(inst));
+                let const_id = self.add_const(ty.clone(), ConstKind::Int(c));
+                self.replace_all_uses_with(ValueId::Inst(inst), ValueId::Const(const_id));
+            }
+
+            self.value_uses(ValueId::Inst(inst))
+                .iter()
+                .for_each(|Use { user, .. }| {
+                    inst_work_list.push(*user);
+                });
+
+            assert!(
+                old_state < new_state,
+                "Value state should only evolve in the direction of Unknown -> Constant -> Overdefined"
+            );
+
+            value_states.insert(inst, new_state);
+        }
+    }
+
+    fn visit_normal_inst(
+        &mut self,
+        inst: InstRef,
+        value_states: &mut HashMap<InstRef, ValueState>,
+        inst_work_list: &mut Vec<InstRef>,
+    ) {
+        let old_state = self.get_value_state(ValueId::Inst(inst), value_states);
+
+        let new_state = match &self.inst(inst).kind {
+            InstKind::Binary { op, lhs, rhs } => {
+                let fold_fn = |a: i64, b: i64| match op {
+                    BinaryOpcode::Add => Some(a + b),
+                    BinaryOpcode::Sub => Some(a - b),
+                    BinaryOpcode::Mul => a.checked_mul(b),
+                    BinaryOpcode::UDiv => (a as u64).checked_div(b as u64).map(|n| n as i64),
+                    BinaryOpcode::SDiv => a.checked_div(b),
+                    BinaryOpcode::URem => (a as u64).checked_rem(b as u64).map(|n| n as i64),
+                    BinaryOpcode::SRem => a.checked_rem(b),
+                    BinaryOpcode::Shl => a.checked_shl(b as u32),
+                    BinaryOpcode::LShr => (a as u64).checked_shr(b as u32).map(|n| n as i64),
+                    BinaryOpcode::AShr => a.checked_shr(b as u32),
+                    BinaryOpcode::And => Some(a & b),
+                    BinaryOpcode::Or => Some(a | b),
+                    BinaryOpcode::Xor => Some(a ^ b),
+                };
+                let lhs_state = self.get_value_state(*lhs, value_states);
+                let rhs_state = self.get_value_state(*rhs, value_states);
+                lhs_state.merge(&rhs_state, fold_fn)
+            }
+            InstKind::Call { .. } => ValueState::Overdefined,
+            InstKind::Branch { .. } => panic!("Branch should be handled in visit_branch_inst"),
+            InstKind::GetElementPtr { .. } => ValueState::Overdefined,
+            InstKind::ICmp { op, lhs, rhs } => {
+                let fold_fn = |a: i64, b: i64| match op {
+                    ICmpCode::Eq => Some((a == b) as i64),
+                    ICmpCode::Ne => Some((a != b) as i64),
+                    ICmpCode::Ugt => Some((a as u64 > b as u64) as i64),
+                    ICmpCode::Uge => Some((a as u64 >= b as u64) as i64),
+                    ICmpCode::Ult => Some(((a as u64) < b as u64) as i64),
+                    ICmpCode::Ule => Some((a as u64 <= b as u64) as i64),
+                    ICmpCode::Sgt => Some((a > b) as i64),
+                    ICmpCode::Sge => Some((a >= b) as i64),
+                    ICmpCode::Slt => Some((a < b) as i64),
+                    ICmpCode::Sle => Some((a <= b) as i64),
+                };
+                let lhs_state = self.get_value_state(*lhs, value_states);
+                let rhs_state = self.get_value_state(*rhs, value_states);
+                lhs_state.merge(&rhs_state, fold_fn)
+            }
+            InstKind::Phi { .. } => panic!("Phi should be handled in visit_phi_inst"),
+            InstKind::Select {
+                cond,
+                then_val,
+                else_val,
+            } => {
+                let cond_state = self.get_value_state(*cond, value_states);
+                let then_state = self.get_value_state(*then_val, value_states);
+                let else_state = self.get_value_state(*else_val, value_states);
+
+                match cond_state {
+                    ValueState::Constant(c) => {
+                        if c != 0 {
+                            then_state
+                        } else {
+                            else_state
+                        }
+                    }
+                    _ => then_state.merge(&else_state, |t, e| if t == e { Some(t) } else { None }),
+                }
+            }
+            InstKind::Trunc { value } => {
+                let mut state = self.get_value_state(*value, value_states);
+                let ty = self.value_ty(ValueId::Inst(inst));
+                let bits = ty.as_int().unwrap().0;
+
+                match &mut state {
+                    ValueState::Constant(c) => {
+                        *c &= (1i64 << bits) - 1;
+                    }
+                    _ => {}
+                }
+                state
+            }
+            InstKind::Zext { value } => self.get_value_state(*value, value_states),
+            InstKind::Sext { value } => self.get_value_state(*value, value_states),
+            _ => ValueState::Overdefined,
+        };
+
+        self.apply_value_state_change(inst, inst_work_list, old_state, new_state, value_states);
+    }
+
+    fn visit_term_inst(
+        &mut self,
+        inst: InstRef,
+        value_states: &mut HashMap<InstRef, ValueState>,
+        cfg_work_list: &mut Vec<BlockId>,
+    ) {
+        match self.inst(inst).kind.clone() {
+            InstKind::Branch { then_block, cond } => {
+                if let Some(CondBranch { cond, else_block }) = cond {
+                    let cond_state = self.get_value_state(cond, value_states);
+                    match cond_state {
+                        ValueState::Constant(c) => {
+                            let new_target = if c != 0 {
+                                cfg_work_list.push(then_block);
+                                then_block
+                            } else {
+                                cfg_work_list.push(else_block);
+                                else_block
+                            };
+                            let new_inst = self.new_inst(
+                                inst.func,
+                                Rc::new(Type::Void(VoidType)),
+                                InstKind::Branch {
+                                    then_block: new_target,
+                                    cond: None,
+                                },
+                                None,
+                            );
+                            self.overwrite_inst(inst, new_inst);
+                        }
+                        ValueState::Overdefined => {
+                            cfg_work_list.push(then_block);
+                            cfg_work_list.push(else_block);
+                        }
+                        ValueState::Unknown => {}
+                    }
+                } else {
+                    cfg_work_list.push(then_block);
+                }
+            }
+            InstKind::Ret { .. } | InstKind::Unreachable => {}
+            _ => panic!("Not a terminator instruction"),
+        }
+    }
+
+    fn get_const_value(&self, const_id: ConstId) -> ValueState {
+        match self.const_data(const_id).kind {
+            ConstKind::Int(i) => ValueState::Constant(i),
+            ConstKind::Null => ValueState::Constant(0),
+            ConstKind::Undef => ValueState::Constant(0),
+            _ => todo!(),
+        }
+    }
+
+    fn get_value_state(
+        &self,
+        value_id: ValueId,
+        value_states: &HashMap<InstRef, ValueState>,
+    ) -> ValueState {
+        match value_id {
+            ValueId::Inst(inst_ref) => value_states
+                .get(&inst_ref)
+                .cloned()
+                .unwrap_or(ValueState::Unknown),
+            ValueId::Arg(..) => ValueState::Overdefined,
+            ValueId::Global(global_id) => match self.global(global_id).kind {
+                GlobalKind::Function(..) => ValueState::Overdefined,
+                GlobalKind::GlobalVariable {
+                    is_constant,
+                    initializer,
+                } => {
+                    if is_constant {
+                        self.get_const_value(initializer.unwrap())
+                    } else {
+                        ValueState::Overdefined
+                    }
+                }
+            },
+            ValueId::Const(const_id) => self.get_const_value(const_id),
+        }
+    }
+}
