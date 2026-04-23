@@ -188,13 +188,17 @@ impl<'a> IRBuilder<'a> {
     ) -> InstRef {
         let func = self.current_func();
         let incomings: HashMap<usize, PhiIncoming> = incomings
-            .into_iter().enumerate()
+            .into_iter()
+            .enumerate()
             .map(|(idx, (value, block))| {
                 assert_eq!(block.func, func);
-                (idx, PhiIncoming {
-                    block: block.block,
-                    value,
-                })
+                (
+                    idx,
+                    PhiIncoming {
+                        block: block.block,
+                        value,
+                    },
+                )
             })
             .collect();
         let idx = incomings.len();
@@ -503,13 +507,17 @@ impl CursorBuilder {
     ) -> InstRef {
         let func = self.get_current_function();
         let incomings: HashMap<usize, PhiIncoming> = incomings
-            .into_iter().enumerate()
+            .into_iter()
+            .enumerate()
             .map(|(idx, (value, block))| {
                 assert_eq!(block.func, func);
-                (idx, PhiIncoming {
-                    block: block.block,
-                    value,
-                })
+                (
+                    idx,
+                    PhiIncoming {
+                        block: block.block,
+                        value,
+                    },
+                )
             })
             .collect();
         let idx = incomings.len();

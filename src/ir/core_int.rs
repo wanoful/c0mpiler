@@ -155,7 +155,10 @@ impl CoreInt {
             return None;
         }
 
-        Some(Self::new(self.value.wrapping_shl(rhs.value as u32), self.bit_width))
+        Some(Self::new(
+            self.value.wrapping_shl(rhs.value as u32),
+            self.bit_width,
+        ))
     }
 
     pub fn checked_lshr(self, rhs: Self) -> Option<Self> {
@@ -165,7 +168,10 @@ impl CoreInt {
             return None;
         }
 
-        Some(Self::new(self.value.wrapping_shr(rhs.value as u32), self.bit_width))
+        Some(Self::new(
+            self.value.wrapping_shr(rhs.value as u32),
+            self.bit_width,
+        ))
     }
 
     pub fn checked_ashr(self, rhs: Self) -> Option<Self> {
@@ -335,8 +341,16 @@ mod tests {
                 .as_i64(),
             0
         );
-        assert_eq!(minus_one_i8.clone().checked_udiv(two_i8).unwrap().as_u64(), 127);
-        assert!(minus_one_i8.clone().checked_sdiv(CoreInt::new(0, 8)).is_none());
+        assert_eq!(
+            minus_one_i8.clone().checked_udiv(two_i8).unwrap().as_u64(),
+            127
+        );
+        assert!(
+            minus_one_i8
+                .clone()
+                .checked_sdiv(CoreInt::new(0, 8))
+                .is_none()
+        );
         assert!(minus_one_i8.checked_udiv(CoreInt::new(0, 8)).is_none());
     }
 }

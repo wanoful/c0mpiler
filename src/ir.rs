@@ -3,13 +3,13 @@ mod cfg;
 pub mod core;
 pub mod core_builder;
 pub mod core_inst;
+pub mod core_int;
 pub mod core_value;
 pub mod destructor;
 pub mod ir_output;
 pub mod ir_type;
 pub mod layout;
 pub mod opt;
-pub mod core_int;
 
 use std::{
     cell::RefCell,

@@ -312,9 +312,7 @@ fn emit_add_offset<T: LoweringTarget>(
     if let ValueId::Const(constant) = index
         && let ConstKind::Int(number) = &module.const_data(constant).kind
     {
-        let imm = (number.as_i64() as i32)
-            .checked_mul(stride as i32)
-            .unwrap();
+        let imm = (number.as_i64() as i32).checked_mul(stride as i32).unwrap();
         if (-2048..=2047).contains(&imm) {
             let result_reg = Register::Virtual(machine_function.new_vreg());
             out.push(T::emit_addi(result_reg, base, imm));

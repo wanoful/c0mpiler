@@ -162,9 +162,9 @@ impl InstKind {
                     f(cond.else_block, BlockOperandSlot::BranchElse);
                 }
             }
-            InstKind::Phi { incomings,.. } => incomings
-                .iter()
-                .for_each(|(i, incoming)| f(incoming.block, BlockOperandSlot::PhiIncomingBlock(*i))),
+            InstKind::Phi { incomings, .. } => incomings.iter().for_each(|(i, incoming)| {
+                f(incoming.block, BlockOperandSlot::PhiIncomingBlock(*i))
+            }),
             _ => {}
         }
     }
@@ -206,7 +206,7 @@ impl InstKind {
                 f(*lhs, OperandSlot::ICmpLhs);
                 f(*rhs, OperandSlot::ICmpRhs);
             }
-            InstKind::Phi { incomings,.. } => incomings
+            InstKind::Phi { incomings, .. } => incomings
                 .iter()
                 .for_each(|(i, incoming)| f(incoming.value, OperandSlot::PhiIncomingVal(*i))),
             InstKind::Select {
@@ -229,9 +229,12 @@ impl InstKind {
     pub fn replace_block_operand(&mut self, slot: BlockOperandSlot, new_block: BlockId) -> BlockId {
         let block = match (self, slot) {
             (InstKind::Branch { then_block, .. }, BlockOperandSlot::BranchThen) => then_block,
-            (InstKind::Branch { cond: Some(cond), .. }, BlockOperandSlot::BranchElse) => {
-                &mut cond.else_block
-            }
+            (
+                InstKind::Branch {
+                    cond: Some(cond), ..
+                },
+                BlockOperandSlot::BranchElse,
+            ) => &mut cond.else_block,
             (InstKind::Phi { incomings, .. }, BlockOperandSlot::PhiIncomingBlock(i)) => {
                 &mut incomings.get_mut(&i).unwrap().block
             }

@@ -955,10 +955,13 @@ impl ModuleCore {
             InstKind::Phi { incomings, idx } => {
                 let slot = OperandSlot::PhiIncomingVal(*idx);
                 let block_slot = BlockOperandSlot::PhiIncomingBlock(*idx);
-                incomings.insert(*idx, PhiIncoming {
-                    block: block.block,
-                    value,
-                });
+                incomings.insert(
+                    *idx,
+                    PhiIncoming {
+                        block: block.block,
+                        value,
+                    },
+                );
                 *idx += 1;
                 self.value_uses_mut(value).push(Use { user: phi, slot });
                 self.block_uses_mut(block).push(BlockUse {
@@ -972,7 +975,7 @@ impl ModuleCore {
 
     pub(crate) fn phi_remove_incoming_from(&mut self, phi: InstRef, incoming_index: usize) {
         match &mut self.inst_mut(phi).kind {
-            InstKind::Phi { incomings,.. } => {
+            InstKind::Phi { incomings, .. } => {
                 let value = incomings[&incoming_index].value;
                 let block = incomings[&incoming_index].block;
                 incomings.remove(&incoming_index);

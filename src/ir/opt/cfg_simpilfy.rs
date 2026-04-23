@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::ir::{
     cfg::{CFGNode, DFSResult},
     core::{BlockRef, FunctionId, InstRef, ModuleCore, ValueId},
+    core_inst::PhiIncoming,
 };
 
 impl ModuleCore {
@@ -31,11 +32,35 @@ impl ModuleCore {
             .cloned()
             .collect::<Vec<_>>();
 
+        let cfg = self.build_cfg(id);
+
         phis.into_iter().for_each(|phi| {
             let phi_ref = InstRef {
                 func: id,
                 inst: phi,
             };
+            let inst = self.inst(phi_ref);
+            let parent_block = inst.parent.unwrap();
+            let remove_labels = inst
+                .kind
+                .as_phi()
+                .unwrap()
+                .0
+                .iter()
+                .filter_map(|(idx, PhiIncoming { block, value })| {
+                    if !cfg.preds[&CFGNode::Block(parent_block.block)]
+                        .contains(&CFGNode::Block(*block))
+                    {
+                        Some(*idx)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            for remove_label in remove_labels {
+                self.phi_remove_incoming_from(phi_ref, remove_label);
+            }
+
             let inst = self.inst(phi_ref);
             if inst.kind.as_phi().unwrap().0.len() == 1 {
                 let v = inst.kind.as_phi().unwrap().0.values().next().unwrap().value;
@@ -77,11 +102,15 @@ impl ModuleCore {
         let mut work_list = self.func(id).block_order.clone();
 
         let cfg = self.build_cfg(id);
-        let mergerable_block = work_list.iter().filter(|&&x| cfg.preds[&CFGNode::Block(x)].len() == 1).cloned().collect::<HashSet<_>>();
+        let mergerable_block = work_list
+            .iter()
+            .filter(|&&x| cfg.preds[&CFGNode::Block(x)].len() == 1)
+            .cloned()
+            .collect::<HashSet<_>>();
 
         let mut removed = HashSet::new();
 
-        while let Some(block_id) = work_list.pop(){
+        while let Some(block_id) = work_list.pop() {
             if !visited.insert(block_id) {
                 continue;
             }
@@ -106,7 +135,12 @@ impl ModuleCore {
             }
 
             let phis = self.phis_in_order(succ_ref);
-            assert!(phis.len() == 0, "Cannot merge block {:?} into {:?} because the successor has phi nodes", block_ref, succ_ref);
+            assert!(
+                phis.len() == 0,
+                "Cannot merge block {:?} into {:?} because the successor has phi nodes",
+                block_ref,
+                succ_ref
+            );
             let insts = self.insts_in_order(succ_ref);
             insts.iter().for_each(|inst| {
                 self.detach_inst(*inst);

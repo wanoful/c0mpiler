@@ -484,7 +484,7 @@ impl ModuleCore {
                     self.ir_print_typed_value(*index, helper);
                 }
             }
-            InstKind::Phi { incomings,.. } => {
+            InstKind::Phi { incomings, .. } => {
                 helper.append_white("phi");
                 inst_data.ty.as_ref().ir_print(helper);
                 helper.append(" ");
