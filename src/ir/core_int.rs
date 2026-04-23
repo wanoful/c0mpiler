@@ -44,7 +44,7 @@ impl CoreInt {
         if self.bit_width == 1 {
             return self.value as i64;
         }
-        return self.as_i64_raw();
+        self.as_i64_raw()
     }
 
     pub fn as_i64_raw(&self) -> i64 {

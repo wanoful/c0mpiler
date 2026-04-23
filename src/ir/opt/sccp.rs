@@ -4,8 +4,7 @@ use std::{
 };
 
 use crate::ir::{
-    cfg::CFGNode,
-    core::{BlockId, BlockRef, ConstId, FunctionId, InstRef, ModuleCore, Use, ValueId},
+    core::{BlockId, ConstId, FunctionId, InstRef, ModuleCore, Use, ValueId},
     core_inst::{BinaryOpcode, CondBranch, ICmpCode, InstKind, PhiIncoming},
     core_int::CoreInt,
     core_value::{ConstKind, GlobalKind},
@@ -81,7 +80,7 @@ impl ModuleCore {
                     .for_each(|inst| {
                         self.visit_phi_inst(
                             InstRef {
-                                inst: inst,
+                                inst,
                                 func: id,
                             },
                             &mut value_states,
@@ -97,7 +96,7 @@ impl ModuleCore {
                     .for_each(|inst| {
                         self.visit_normal_inst(
                             InstRef {
-                                inst: inst,
+                                inst,
                                 func: id,
                             },
                             &mut value_states,

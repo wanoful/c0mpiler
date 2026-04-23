@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::ir::{
     cfg::{CFGNode, DFSResult},
@@ -47,7 +47,7 @@ impl ModuleCore {
                 .unwrap()
                 .0
                 .iter()
-                .filter_map(|(idx, PhiIncoming { block, value })| {
+                .filter_map(|(idx, PhiIncoming { block, .. })| {
                     if !cfg.preds[&CFGNode::Block(parent_block.block)]
                         .contains(&CFGNode::Block(*block))
                     {
@@ -85,7 +85,7 @@ impl ModuleCore {
             .block_order
             .iter()
             .filter_map(|block_id| {
-                (!reachable_blocks.contains(block_id)).then(|| crate::ir::core::BlockRef {
+                (!reachable_blocks.contains(block_id)).then_some(crate::ir::core::BlockRef {
                     func: id,
                     block: *block_id,
                 })
@@ -128,7 +128,7 @@ impl ModuleCore {
                 continue;
             }
 
-            let succ_ref = *succ.iter().next().unwrap();
+            let succ_ref = *succ.first().unwrap();
 
             if !mergerable_block.contains(&succ_ref.block) {
                 continue;
@@ -136,7 +136,7 @@ impl ModuleCore {
 
             let phis = self.phis_in_order(succ_ref);
             assert!(
-                phis.len() == 0,
+                phis.is_empty(),
                 "Cannot merge block {:?} into {:?} because the successor has phi nodes",
                 block_ref,
                 succ_ref

@@ -818,7 +818,7 @@ impl ModuleCore {
                 func: user.func,
                 block: block_id,
             })
-            .push(BlockUse { user, slot: slot });
+            .push(BlockUse { user, slot });
         });
     }
 

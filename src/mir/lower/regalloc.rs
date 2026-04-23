@@ -230,7 +230,7 @@ impl<T: LoweringTarget> Lowerer<T> {
                     .use_regs()
                     .iter()
                     .filter_map(|r| match r {
-                        Register::Virtual(v) => vreg_ids.contains(v).then(|| *v),
+                        Register::Virtual(v) => vreg_ids.contains(v).then_some(*v),
                         Register::Physical(_) => None,
                     })
                     .collect::<Vec<_>>();
@@ -238,7 +238,7 @@ impl<T: LoweringTarget> Lowerer<T> {
                     .def_regs()
                     .iter()
                     .filter_map(|r| match r {
-                        Register::Virtual(v) => vreg_ids.contains(v).then(|| *v),
+                        Register::Virtual(v) => vreg_ids.contains(v).then_some(*v),
                         Register::Physical(_) => None,
                     })
                     .collect::<Vec<_>>();
@@ -261,7 +261,7 @@ impl<T: LoweringTarget> Lowerer<T> {
                 new_insts.push(rewritten);
 
                 for vreg_id in defs_spilled.iter() {
-                    let temp_out = def_map[&vreg_id];
+                    let temp_out = def_map[vreg_id];
                     let rt = Register::Virtual(machine_function.new_vreg());
                     new_insts.push(T::emit_store_stack_slot(temp_out, slots[vreg_id], rt));
                 }

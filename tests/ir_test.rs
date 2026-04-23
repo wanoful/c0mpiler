@@ -224,6 +224,8 @@ fn run_test_cases(
             fault!("{name} compilation failed:\n{stderr}");
         }
 
+        let timer = std::time::Instant::now();
+
         if !dry_run {
             // Run the compiled program
             let input_data = if in_path.exists() {
@@ -287,7 +289,14 @@ fn run_test_cases(
             }
         }
 
-        println!("{name} passed!");
+        let run_time = timer.elapsed();
+
+        let time_str = if dry_run {
+            String::new()
+        } else {
+            format!("Running time: {:.2?}", run_time)
+        };
+        println!("{name} passed! {time_str}");
         success += 1;
     }
 
@@ -477,7 +486,9 @@ fn run_test_cases_with_reimu(
             reimu_args.push(out_arg);
         }
 
+        let timer = std::time::Instant::now();
         let reimu_result = Command::new(reimu_path).args(&reimu_args).output();
+        let run_time = timer.elapsed();
 
         let reimu_output = match reimu_result {
             Ok(output) => output,
@@ -492,7 +503,8 @@ fn run_test_cases_with_reimu(
             fault!("{name} reimu execution failed:\nstdout:\n{stdout}\nstderr:\n{stderr}");
         }
 
-        println!("{name} passed!");
+        let time_str = format!("Running time: {:.2?}", run_time);
+        println!("{name} passed! {}", time_str);
         success += 1;
     }
 

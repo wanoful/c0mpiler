@@ -26,14 +26,13 @@ struct PrintHelper {
     core_block_rename_map: HashMap<BlockRef, String>,
 
     indent: usize,
-    value_with_type: bool,
     no_struct_type_alias: bool,
 
     top_level_strings: String,
 }
 
 impl PrintHelper {
-    fn add_struct_defination(&mut self, map: &HashMap<String, TypePtr>) {
+    fn add_struct_definition(&mut self, map: &HashMap<String, TypePtr>) {
         let mut helper = PrintHelper {
             used_named_struct: self.used_named_struct.clone(),
             ..Default::default()
@@ -154,7 +153,7 @@ impl ModuleCore {
             target.ir_print(&mut helper);
         }
         self.ir_print(&mut helper);
-        helper.add_struct_defination(&self.named_structs);
+        helper.add_struct_definition(&self.named_structs);
         helper.get_result()
     }
 }

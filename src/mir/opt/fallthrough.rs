@@ -12,11 +12,10 @@ impl<T: LoweringTarget> Lowerer<T> {
             .iter_mut()
             .zip(order.into_iter().skip(1))
         {
-            if let Some(last_inst) = block.instructions.last() {
-                if T::is_jump_to(last_inst, next_id) {
+            if let Some(last_inst) = block.instructions.last()
+                && T::is_jump_to(last_inst, next_id) {
                     block.instructions.pop();
                 }
-            }
         }
     }
 }

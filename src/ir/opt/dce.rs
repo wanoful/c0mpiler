@@ -48,12 +48,11 @@ impl ModuleCore {
         while let Some(live_id) = work_list.pop() {
             let live_inst = &function.insts[live_id];
             live_inst.kind.for_each_value_operand(|v, _| {
-                if let ValueId::Inst(InstRef { inst, .. }) = v {
-                    if !live_insts.contains(&inst) {
+                if let ValueId::Inst(InstRef { inst, .. }) = v
+                    && !live_insts.contains(&inst) {
                         live_insts.insert(inst);
                         work_list.push(inst);
                     }
-                }
             });
         }
 
@@ -154,7 +153,7 @@ impl ModuleCore {
 
         let mut cfg = self.build_cfg(id);
         let DFSResult { order, .. } = cfg.build_dfn();
-        let front_reachable: HashSet<CFGNode> = HashSet::from_iter(order.into_iter());
+        let front_reachable: HashSet<CFGNode> = HashSet::from_iter(order);
 
         let dom_tree = cfg.build_dom_tree();
 
@@ -174,7 +173,7 @@ impl ModuleCore {
             ..
         } = reverse_cfg.build_dfn();
 
-        let back_reachable: HashSet<CFGNode> = HashSet::from_iter(reverse_order.into_iter());
+        let back_reachable: HashSet<CFGNode> = HashSet::from_iter(reverse_order);
         let dead_ends = front_reachable
             .difference(&back_reachable)
             .collect::<HashSet<_>>();
@@ -211,24 +210,22 @@ impl ModuleCore {
         while let Some(inst_id) = work_list.pop() {
             let inst = &function.insts[inst_id];
             inst.kind.for_each_value_operand(|v, _| {
-                if let ValueId::Inst(InstRef { inst, .. }) = v {
-                    if !live_insts.contains(&inst) {
+                if let ValueId::Inst(InstRef { inst, .. }) = v
+                    && !live_insts.contains(&inst) {
                         live_insts.insert(inst);
                         work_list.push(inst);
                     }
-                }
             });
 
             // Phi 的控制依赖也需要保活
             if let InstKind::Phi { incomings, .. } = &inst.kind {
                 for PhiIncoming { block, .. } in incomings.values() {
                     let block = &function.blocks[*block];
-                    if let Some(term) = block.terminator {
-                        if !live_insts.contains(&term) {
+                    if let Some(term) = block.terminator
+                        && !live_insts.contains(&term) {
                             live_insts.insert(term);
                             work_list.push(term);
                         }
-                    }
                 }
             }
 
@@ -240,12 +237,11 @@ impl ModuleCore {
             for &f in frontier.iter() {
                 let block_id = f.into_block().unwrap();
                 let block = &function.blocks[block_id];
-                if let Some(term) = block.terminator {
-                    if !live_insts.contains(&term) {
+                if let Some(term) = block.terminator
+                    && !live_insts.contains(&term) {
                         live_insts.insert(term);
                         work_list.push(term);
                     }
-                }
             }
         }
 

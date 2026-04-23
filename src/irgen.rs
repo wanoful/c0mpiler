@@ -21,7 +21,7 @@ use crate::{
         ir_type::TypePtr,
         layout::TargetDataLayout,
     },
-    irgen::value::{CoreValueContainer, ValuePtrContainer},
+    irgen::value::CoreValueContainer,
     semantics::{
         analyzer::SemanticAnalyzer,
         resolved_ty::{ResolvedTy, ResolvedTyKind, TypeKey},
@@ -33,15 +33,14 @@ use crate::{
 
 pub struct IRGenerator<'ast, 'analyzer> {
     pub(crate) context: LLVMContext,
-    pub(crate) core_module: Rc<RefCell<ModuleCore>>,
-    pub(crate) core_builder: CursorBuilder,
-    pub(crate) core_alloca_builder: CursorBuilder,
+    pub(crate) module: Rc<RefCell<ModuleCore>>,
+    pub(crate) builder: CursorBuilder,
+    pub(crate) alloca_builder: CursorBuilder,
 
     pub(crate) analyzer: &'analyzer SemanticAnalyzer<'ast>,
 
-    pub(crate) value_indexes: HashMap<ValueIndex, ValuePtrContainer>,
-    pub(crate) core_value_indexes: HashMap<ValueIndex, CoreValueContainer>,
-    pub(crate) core_expr_values: HashMap<NodeId, CoreValueContainer>,
+    pub(crate) value_indexes: HashMap<ValueIndex, CoreValueContainer>,
+    pub(crate) expr_values: HashMap<NodeId, CoreValueContainer>,
 
     pub(crate) visited_impls: HashSet<(TypeKey, Option<TypeKey>)>,
 }
@@ -57,21 +56,20 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         let core_expr_values = HashMap::default();
 
         add_builtin_struct_types(&context);
-        add_core_preludes(&context, &mut core_builder, &mut core_value_indexes);
+        add_preludes(&context, &mut core_builder, &mut core_value_indexes);
         let value_indexes = core_value_indexes
             .iter()
-            .map(|(index, value)| (index.clone(), value.clone().into()))
+            .map(|(index, value)| (index.clone(), value.clone()))
             .collect();
 
         let mut generator = Self {
             context,
-            core_module,
-            core_builder,
-            core_alloca_builder,
+            module: core_module,
+            builder: core_builder,
+            alloca_builder: core_alloca_builder,
             analyzer,
             value_indexes,
-            core_value_indexes,
-            core_expr_values,
+            expr_values: core_expr_values,
             visited_impls: HashSet::new(),
         };
 
@@ -88,15 +86,15 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     }
 
     pub fn print(&self) -> String {
-        self.core_module.borrow().print()
+        self.module.borrow().print()
     }
 
     pub fn core_print(&self) -> String {
-        self.core_module.borrow().print()
+        self.module.borrow().print()
     }
 
     pub fn module(&self) -> Ref<'_, ModuleCore> {
-        self.core_module.borrow()
+        self.module.borrow()
     }
 
     fn absorb_analyzer_struct(&self, structs: &mut HashMap<TypeKey, ResolvedTy>) {
@@ -146,7 +144,7 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     }
 
     fn sync_named_structs_to_core(&mut self) {
-        self.core_module
+        self.module
             .borrow_mut()
             .extend_named_structs(self.context.named_struct_types());
     }
@@ -161,13 +159,12 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
             let full_name = self.analyzer.get_full_name(scope_id, s.clone());
 
             let core_v = self.absorb_analyzer_global_value_core(value, is_main_function, full_name);
-            let v: ValuePtrContainer = core_v.clone().into();
+            let v: CoreValueContainer = core_v.clone();
             let index = ValueIndex::Place(PlaceValueIndex {
                 name: s.clone(),
                 kind: crate::semantics::value::ValueIndexKind::Global { scope_id },
             });
             self.value_indexes.insert(index.clone(), v);
-            self.core_value_indexes.insert(index, core_v);
         }
 
         for id in &scope.children {
@@ -186,8 +183,8 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         match &value.kind {
             Constant(inner) => {
                 let init = self.create_constant_initialization_core(inner, value.ty);
-                let ty = self.core_module.borrow().const_data(init).ty.clone();
-                let global = self.core_module.borrow_mut().add_global(
+                let ty = self.module.borrow().const_data(init).ty.clone();
+                let global = self.module.borrow_mut().add_global(
                     full_name.to_string(),
                     ty.clone(),
                     crate::ir::core_value::GlobalKind::GlobalVariable {
@@ -249,23 +246,23 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                 let is_declare = *is_placeholder
                     || matches!(ast_node, crate::semantics::value::FnAstRefInfo::None);
                 let func = if is_declare {
-                    self.core_module
+                    self.module
                         .borrow_mut()
                         .declare_function_value(full_name.to_string(), fn_ty.clone())
                 } else {
-                    self.core_module
+                    self.module
                         .borrow_mut()
                         .define_function_value(full_name.to_string(), fn_ty.clone())
                 };
                 {
-                    let mut module = self.core_module.borrow_mut();
+                    let mut module = self.module.borrow_mut();
                     module.append_signature_args(func);
                     if let Some(aggregate_type) = aggregate_type {
                         module.set_sret(func, aggregate_type);
                     }
                 }
                 let func_value = self
-                    .core_module
+                    .module
                     .borrow()
                     .get_function_value(func)
                     .expect("function should have a value global");
@@ -292,21 +289,16 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
 
                 match probe.kind {
                     ResolvedTyKind::BuiltIn(builtin) => match builtin {
-                        Bool => self.core_module.borrow_mut().add_i1_const(*i != 0),
-                        Char => self.core_module.borrow_mut().add_int_const(8, *i as i64),
-                        I32 | ISize | U32 | USize => {
-                            self.core_module.borrow_mut().add_i32_const(*i)
-                        }
+                        Bool => self.module.borrow_mut().add_i1_const(*i != 0),
+                        Char => self.module.borrow_mut().add_int_const(8, *i as i64),
+                        I32 | ISize | U32 | USize => self.module.borrow_mut().add_i32_const(*i),
                         Str => impossible!(),
                     },
-                    ResolvedTyKind::Enum => self.core_module.borrow_mut().add_i32_const(*i),
+                    ResolvedTyKind::Enum => self.module.borrow_mut().add_i32_const(*i),
                     _ => impossible!(),
                 }
             }
-            ConstantString(string) => self
-                .core_module
-                .borrow_mut()
-                .add_string_const(string.clone()),
+            ConstantString(string) => self.module.borrow_mut().add_string_const(string.clone()),
             ConstantArray(inners) => {
                 let inner_ty = probe.kind.as_array().unwrap().0;
                 let values = inners
@@ -314,11 +306,11 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                     .map(|x| self.create_constant_initialization_core(x, *inner_ty))
                     .collect();
                 let ty = self.transform_interned_ty_faithfully(intern);
-                self.core_module.borrow_mut().add_array_const(ty, values)
+                self.module.borrow_mut().add_array_const(ty, values)
             }
             Unit | UnitStruct => {
                 let ty = self.transform_interned_ty_faithfully(intern);
-                self.core_module.borrow_mut().add_struct_const(ty, vec![])
+                self.module.borrow_mut().add_struct_const(ty, vec![])
             }
             UnEval(_) | Placeholder => impossible!(),
         }
@@ -338,7 +330,7 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
             for (s, PlaceValue { value, .. }) in &impls.inherent.values {
                 let full_name = name.clone().concat(s.clone());
                 let core_v = self.absorb_analyzer_global_value_core(value, false, full_name);
-                let v: ValuePtrContainer = core_v.clone().into();
+                let v: CoreValueContainer = core_v.clone();
                 let index = ValueIndex::Place(PlaceValueIndex {
                     name: s.clone(),
                     kind: crate::semantics::value::ValueIndexKind::Impl {
@@ -347,7 +339,6 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                     },
                 });
                 self.value_indexes.insert(index.clone(), v);
-                self.core_value_indexes.insert(index, core_v);
             }
             for (trait_ty, impl_info) in &impls.traits {
                 let name = name
@@ -356,7 +347,7 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                 for (s, PlaceValue { value, .. }) in &impl_info.values {
                     let full_name = name.clone().concat(s.clone());
                     let core_v = self.absorb_analyzer_global_value_core(value, false, full_name);
-                    let v: ValuePtrContainer = core_v.clone().into();
+                    let v: CoreValueContainer = core_v.clone();
                     let index = ValueIndex::Place(PlaceValueIndex {
                         name: s.clone(),
                         kind: crate::semantics::value::ValueIndexKind::Impl {
@@ -365,54 +356,53 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                         },
                     });
                     self.value_indexes.insert(index.clone(), v);
-                    self.core_value_indexes.insert(index, core_v);
                 }
             }
         }
     }
 
-    pub fn build_core_alloca(&mut self, ty: TypePtr, name: Option<&str>) -> ValueId {
-        ValueId::Inst(self.core_alloca_builder.build_alloca(ty, name))
+    pub fn build_alloca(&mut self, ty: TypePtr, name: Option<&str>) -> ValueId {
+        ValueId::Inst(self.alloca_builder.build_alloca(ty, name))
     }
 
-    pub(crate) fn set_core_expr_value(&mut self, expr_id: NodeId, value: CoreValueContainer) {
-        self.core_expr_values.insert(expr_id, value);
+    pub(crate) fn set_expr_value(&mut self, expr_id: NodeId, value: CoreValueContainer) {
+        self.expr_values.insert(expr_id, value);
     }
 
-    pub(crate) fn get_core_expr_value(&self, expr_id: &NodeId) -> Option<CoreValueContainer> {
-        self.core_expr_values.get(expr_id).cloned()
+    pub(crate) fn get_expr_value(&self, expr_id: &NodeId) -> Option<CoreValueContainer> {
+        self.expr_values.get(expr_id).cloned()
     }
 
-    pub(crate) fn clear_core_expr_value(&mut self, expr_id: &NodeId) {
-        self.core_expr_values.remove(expr_id);
+    pub(crate) fn clear_expr_value(&mut self, expr_id: &NodeId) {
+        self.expr_values.remove(expr_id);
     }
 
     pub fn opt_mem2reg(&mut self) {
-        self.core_module.borrow_mut().opt_pass_mem2reg();
+        self.module.borrow_mut().opt_pass_mem2reg();
     }
 
     pub fn opt_dce(&mut self) {
-        self.core_module.borrow_mut().opt_dead_code_elimination();
+        self.module.borrow_mut().opt_dead_code_elimination();
     }
 
     pub fn opt_adce(&mut self) {
-        self.core_module
+        self.module
             .borrow_mut()
             .opt_aggressive_dead_code_elimination();
     }
 
     pub fn opt_sccp(&mut self) {
-        self.core_module
+        self.module
             .borrow_mut()
             .opt_sparse_conditional_constant_propagation();
     }
 
     pub fn opt_cfg_simplify(&mut self) {
-        self.core_module.borrow_mut().opt_cfg_simplify();
+        self.module.borrow_mut().opt_cfg_simplify();
     }
 
     pub fn opt_merge_return(&mut self) {
-        self.core_module.borrow_mut().opt_merge_return();
+        self.module.borrow_mut().opt_merge_return();
     }
 }
 
@@ -434,7 +424,7 @@ fn add_builtin_struct_types(context: &LLVMContext) {
     );
 }
 
-fn add_core_preludes(
+fn add_preludes(
     context: &LLVMContext,
     builder: &mut CursorBuilder,
     value_indexes: &mut HashMap<ValueIndex, CoreValueContainer>,

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::ast::{Symbol, expr::*};
 use crate::ir::core::ValueId;
 use crate::irgen::extra::ExprExtra;
-use crate::irgen::value::{CoreContainerKind, CoreValueContainer, ValuePtrContainer};
+use crate::irgen::value::{CoreContainerKind, CoreValueContainer};
 use crate::{irgen::IRGenerator, semantics::visitor::Visitor};
 
 impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
@@ -11,18 +11,18 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         &mut self,
         expr: &'ast Expr,
         extra: ExprExtra<'tmp>,
-        right_value: ValuePtrContainer,
+        right_value: CoreValueContainer,
     ) -> Option<()> {
         self.core_destructing_assign(
             expr,
             extra,
             CoreValueContainer {
-                value: right_value.value_ptr,
+                value: right_value.value,
                 kind: match right_value.kind {
-                    crate::irgen::value::ContainerKind::Raw { fat } => {
+                    crate::irgen::value::CoreContainerKind::Raw { fat } => {
                         crate::irgen::value::CoreContainerKind::Raw { fat }
                     }
-                    crate::irgen::value::ContainerKind::Ptr(ty) => {
+                    crate::irgen::value::CoreContainerKind::Ptr(ty) => {
                         crate::irgen::value::CoreContainerKind::Ptr(ty)
                     }
                 },
@@ -36,7 +36,7 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         extra: ExprExtra<'tmp>,
         right_value: CoreValueContainer,
     ) -> Option<()> {
-        let right_value = self.core_get_value_presentation(right_value);
+        let right_value = self.get_value_presentation(right_value);
         match &expr.kind {
             ExprKind::Array(ArrayExpr(exprs)) => {
                 let inner_ty = right_value
@@ -52,8 +52,8 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                     .enumerate()
                     .map(|(i, expr)| {
                         let index =
-                            ValueId::Const(self.core_module.borrow_mut().add_i32_const(i as u32));
-                        let v = self.core_builder.build_getelementptr(
+                            ValueId::Const(self.module.borrow_mut().add_i32_const(i as u32));
+                        let v = self.builder.build_getelementptr(
                             inner_ty.clone(),
                             right_value.value,
                             vec![index],
@@ -81,12 +81,10 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                         .zip(inner_tys)
                         .enumerate()
                         .map(|(i, (expr, inner_ty))| {
-                            let zero =
-                                ValueId::Const(self.core_module.borrow_mut().add_i32_const(0));
-                            let index = ValueId::Const(
-                                self.core_module.borrow_mut().add_i32_const(i as u32),
-                            );
-                            let v = self.core_builder.build_getelementptr(
+                            let zero = ValueId::Const(self.module.borrow_mut().add_i32_const(0));
+                            let index =
+                                ValueId::Const(self.module.borrow_mut().add_i32_const(i as u32));
+                            let v = self.builder.build_getelementptr(
                                 struct_type.clone(),
                                 right_value.value,
                                 vec![zero, index],
@@ -117,10 +115,10 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
 
                 for ExprField { ident, expr, .. } in fields {
                     let index = order.get(&ident.symbol).unwrap();
-                    let zero = ValueId::Const(self.core_module.borrow_mut().add_i32_const(0));
+                    let zero = ValueId::Const(self.module.borrow_mut().add_i32_const(0));
                     let index_value =
-                        ValueId::Const(self.core_module.borrow_mut().add_i32_const(*index as u32));
-                    let v = self.core_builder.build_getelementptr(
+                        ValueId::Const(self.module.borrow_mut().add_i32_const(*index as u32));
+                    let v = self.builder.build_getelementptr(
                         struct_type.clone(),
                         right_value.value,
                         vec![zero, index_value],
@@ -141,8 +139,8 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
             _ => {
                 let expr_value = self.visit_expr(expr, extra)?;
                 let ptr = self.get_value_ptr(expr_value);
-                self.core_store_to_ptr(
-                    ptr.value_ptr,
+                self.store_to_ptr(
+                    ptr.value,
                     CoreValueContainer {
                         value: right_value.value,
                         kind: match right_value.kind {

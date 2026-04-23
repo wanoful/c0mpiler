@@ -1,7 +1,7 @@
 use crate::{
     ast::NodeId,
     ir::core::{BlockRef, ValueId},
-    irgen::value::{CoreValueContainer, ValuePtrContainer},
+    irgen::value::CoreValueContainer,
     semantics::{item::AssociatedInfo, resolved_ty::ResolvedTyInstance},
 };
 
@@ -32,7 +32,7 @@ pub(crate) struct ItemExtra {
 }
 
 pub(crate) struct PatExtra {
-    pub(crate) value: ValuePtrContainer,
+    pub(crate) value: CoreValueContainer,
     pub(crate) core_value: Option<CoreValueContainer>,
     pub(crate) self_id: NodeId,
     pub(crate) is_temp_value: bool,

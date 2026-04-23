@@ -14,10 +14,7 @@ use crate::{
     irgen::{
         IRGenerator,
         extra::ExprExtra,
-        value::{
-            ContainerKind, CoreContainerKind, CoreValueContainer, CoreValueKind, ValueKind,
-            ValuePtrContainer,
-        },
+        value::{CoreContainerKind, CoreValueContainer, ValueKind},
     },
     semantics::{analyzer::SemanticAnalyzer, visitor::Visitor},
 };
@@ -29,19 +26,15 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         expr1: &'ast Expr,
         expr2: &'ast Expr,
         extra: ExprExtra,
-    ) -> Option<ValuePtrContainer> {
+    ) -> Option<CoreValueContainer> {
         let self_intern = self.analyzer.get_expr_type(&extra.self_id);
         let self_probe = self.analyzer.probe_type(self_intern).unwrap();
         let value1 = self.visit_expr(expr1, extra)?;
         let value2 = self.visit_expr(expr2, extra)?;
         if SemanticAnalyzer::is_string_type(&self_probe) {
             let string_ty: TypePtr = self.context.get_named_struct_type("String").unwrap().into();
-            let ret = self.build_core_alloca(string_ty.clone(), None);
-            let func = self
-                .core_module
-                .borrow()
-                .get_function("string_plus")
-                .unwrap();
+            let ret = self.build_alloca(string_ty.clone(), None);
+            let func = self.module.borrow().get_function("string_plus").unwrap();
             let args = once(ret)
                 .chain(
                     vec![value1, value2]
@@ -49,8 +42,8 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                         .flat_map(|x| self.get_value_presentation(x).flatten()),
                 )
                 .collect();
-            self.core_builder.build_call(func, args, None);
-            self.set_core_expr_value(
+            self.builder.build_call(func, args, None);
+            self.set_expr_value(
                 extra.self_id,
                 CoreValueContainer {
                     value: ret,
@@ -58,9 +51,9 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                 },
             );
 
-            Some(ValuePtrContainer {
-                value_ptr: ret,
-                kind: ContainerKind::Ptr(string_ty),
+            Some(CoreValueContainer {
+                value: ret,
+                kind: CoreContainerKind::Ptr(string_ty),
             })
         } else {
             let raw1 = self.get_raw_value(value1);
@@ -68,8 +61,8 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
 
             let intern = self.analyzer.get_expr_type(&extra.self_id);
             let value = self.visit_binary_impl_core(bin_op, raw1, raw2, intern);
-            self.set_core_expr_value(extra.self_id, value.clone());
-            Some(value.into())
+            self.set_expr_value(extra.self_id, value.clone());
+            Some(value)
         }
     }
 
@@ -116,9 +109,7 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
             _ => impossible!(),
         };
 
-        let value = self
-            .core_builder
-            .build_binary(op_code, ty, raw1, raw2, None);
+        let value = self.builder.build_binary(op_code, ty, raw1, raw2, None);
 
         CoreValueContainer {
             value: ValueId::Inst(value),
@@ -132,7 +123,7 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         expr1: &'ast Expr,
         expr2: &'ast Expr,
         extra: ExprExtra,
-    ) -> Option<ValuePtrContainer> {
+    ) -> Option<CoreValueContainer> {
         let value1 = self.visit_expr(expr1, extra)?;
         let value2 = self.visit_expr(expr2, extra)?;
 
@@ -176,13 +167,13 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
 
         let lhs = self.get_raw_value(value1);
         let rhs = self.get_raw_value(value2);
-        let value = self.core_builder.build_icmp(op_code, lhs, rhs, None);
+        let value = self.builder.build_icmp(op_code, lhs, rhs, None);
         let value = CoreValueContainer {
             value: ValueId::Inst(value),
             kind: CoreContainerKind::Raw { fat: None },
         };
-        self.set_core_expr_value(extra.self_id, value.clone());
-        Some(value.into())
+        self.set_expr_value(extra.self_id, value.clone());
+        Some(value)
     }
 
     pub(crate) fn visit_logic(
@@ -191,27 +182,27 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         expr1: &'ast Expr,
         expr2: &'ast Expr,
         extra: ExprExtra,
-    ) -> Option<ValuePtrContainer> {
+    ) -> Option<CoreValueContainer> {
         let value1 = self.visit_expr(expr1, extra)?;
         let raw1 = self.get_raw_value(value1);
-        let current_fn = self.core_builder.get_current_function();
-        let current_bb = self.core_builder.get_current_basic_block();
-        let right_bb = self.core_builder.append_block(current_fn, Some(".right"));
-        let next_bb = self.core_builder.append_block(current_fn, Some(".next"));
+        let current_fn = self.builder.get_current_function();
+        let current_bb = self.builder.get_current_basic_block();
+        let right_bb = self.builder.append_block(current_fn, Some(".right"));
+        let next_bb = self.builder.append_block(current_fn, Some(".next"));
 
         match bin_op {
             BinOp::And => self.try_build_conditional_branch(raw1, right_bb, next_bb, &expr1.id),
             BinOp::Or => self.try_build_conditional_branch(raw1, next_bb, right_bb, &expr1.id),
             _ => impossible!(),
         };
-        self.core_builder.locate_end(current_fn, right_bb);
+        self.builder.locate_end(current_fn, right_bb);
         let value2 = self.visit_expr(expr2, extra)?;
         let raw2 = self.get_raw_value(value2);
-        let new_right_bb = self.core_builder.get_current_basic_block();
+        let new_right_bb = self.builder.get_current_basic_block();
         self.try_build_branch(next_bb, &expr2.id);
 
-        self.core_builder.locate_end(current_fn, next_bb);
-        let value = self.core_builder.build_phi(
+        self.builder.locate_end(current_fn, next_bb);
+        let value = self.builder.build_phi(
             self.context.i1_type().into(),
             vec![(raw1, current_bb), (raw2, new_right_bb)],
             None,
@@ -220,8 +211,8 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
             value: ValueId::Inst(value),
             kind: CoreContainerKind::Raw { fat: None },
         };
-        self.set_core_expr_value(extra.self_id, value.clone());
-        Some(value.into())
+        self.set_expr_value(extra.self_id, value.clone());
+        Some(value)
     }
 
     pub(crate) fn visit_ret_expr_impl(&mut self, inner_expr: Option<&'ast Expr>, extra: ExprExtra) {
@@ -234,10 +225,10 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                 } else {
                     Some(self.get_raw_value(v))
                 };
-                self.core_builder.build_return(v);
+                self.builder.build_return(v);
             }
         } else {
-            self.core_builder.build_return(None);
+            self.builder.build_return(None);
         };
     }
 
@@ -245,7 +236,7 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     pub fn try_build_return(&mut self, value: Option<ValueId>, expr_id: &NodeId) {
         let result = self.analyzer.get_expr_result(expr_id);
         if result.interrupt.is_not() {
-            self.core_builder.build_return(value);
+            self.builder.build_return(value);
         }
     }
 
@@ -256,7 +247,7 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     pub fn try_build_branch(&mut self, dest: BlockRef, expr_id: &NodeId) {
         let result = self.analyzer.get_expr_result(expr_id);
         if result.interrupt.is_not() {
-            self.core_builder.build_branch(dest);
+            self.builder.build_branch(dest);
         }
     }
 
@@ -273,8 +264,7 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     ) {
         let result = self.analyzer.get_expr_result(expr_id);
         if result.interrupt.is_not() {
-            self.core_builder
-                .build_conditional_branch(cond, iftrue, ifelse);
+            self.builder.build_conditional_branch(cond, iftrue, ifelse);
         }
     }
 
@@ -288,21 +278,21 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         self.try_build_conditional_branch(cond, iftrue, ifelse, expr_id);
     }
 
-    pub(crate) fn special_method_call(&mut self, kind: ValueKind) -> ValuePtrContainer {
+    pub(crate) fn special_method_call(&mut self, kind: ValueKind) -> CoreValueContainer {
         match kind {
             ValueKind::Normal(..) => impossible!(),
-            ValueKind::LenMethod(len) => ValuePtrContainer {
-                value_ptr: ValueId::Const(self.core_module.borrow_mut().add_i32_const(len)),
-                kind: ContainerKind::Raw { fat: None },
+            ValueKind::LenMethod(len) => CoreValueContainer {
+                value: ValueId::Const(self.module.borrow_mut().add_i32_const(len)),
+                kind: CoreContainerKind::Raw { fat: None },
             },
         }
     }
 
-    pub(crate) fn special_method_call_core(&mut self, kind: CoreValueKind) -> CoreValueContainer {
+    pub(crate) fn special_method_call_core(&mut self, kind: ValueKind) -> CoreValueContainer {
         match kind {
-            CoreValueKind::Normal(..) => impossible!(),
-            CoreValueKind::LenMethod(len) => CoreValueContainer {
-                value: ValueId::Const(self.core_module.borrow_mut().add_i32_const(len)),
+            ValueKind::Normal(..) => impossible!(),
+            ValueKind::LenMethod(len) => CoreValueContainer {
+                value: ValueId::Const(self.module.borrow_mut().add_i32_const(len)),
                 kind: CoreContainerKind::Raw { fat: None },
             },
         }

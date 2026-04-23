@@ -150,6 +150,7 @@ impl LLVMContextImpl {
         Self::default()
     }
 
+    #[allow(dead_code)]
     fn int_type(&mut self, bit_width: u8) -> IntTypePtr {
         IntTypePtr(self.ty_pool.int_type(bit_width))
     }
