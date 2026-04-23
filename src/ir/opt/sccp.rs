@@ -4,9 +4,10 @@ use std::{
 };
 
 use crate::ir::{
-    core::{BlockId, ConstId, FunctionId, InstRef, ModuleCore, Use, ValueId},
-    core_int::CoreInt,
+    cfg::CFGNode,
+    core::{BlockId, BlockRef, ConstId, FunctionId, InstRef, ModuleCore, Use, ValueId},
     core_inst::{BinaryOpcode, CondBranch, ICmpCode, InstKind, PhiIncoming},
+    core_int::CoreInt,
     core_value::{ConstKind, GlobalKind},
     ir_type::{Type, VoidType},
 };
@@ -157,11 +158,7 @@ impl ModuleCore {
             })
             .fold(ValueState::Unknown, |acc, value| {
                 acc.merge(&self.get_value_state(*value, value_states), |c1, c2| {
-                    if c1 == c2 {
-                        Some(c1.clone())
-                    } else {
-                        None
-                    }
+                    if c1 == c2 { Some(c1.clone()) } else { None }
                 })
             });
 
@@ -218,146 +215,143 @@ impl ModuleCore {
     ) {
         let old_state = self.get_value_state(ValueId::Inst(inst), value_states);
 
-        let new_state = match &self.inst(inst).kind {
-            InstKind::Binary { op, lhs, rhs } => {
-                let lhs_state = self.get_value_state(*lhs, value_states);
-                let rhs_state = self.get_value_state(*rhs, value_states);
-                let lhs_bits = self.value_int_bits(*lhs);
-                let rhs_bits = self.value_int_bits(*rhs);
+        let new_state =
+            match &self.inst(inst).kind {
+                InstKind::Binary { op, lhs, rhs } => {
+                    let lhs_state = self.get_value_state(*lhs, value_states);
+                    let rhs_state = self.get_value_state(*rhs, value_states);
+                    let lhs_bits = self.value_int_bits(*lhs);
+                    let rhs_bits = self.value_int_bits(*rhs);
 
-                match (lhs_bits, rhs_bits) {
-                    (Some(bits), Some(rhs_bits)) if bits == rhs_bits => {
-                        lhs_state.merge(&rhs_state, |a, b| {
-                            let lhs = if a.bit_width == bits {
-                                a.clone()
-                            } else {
-                                CoreInt::from_signed(a.as_i64(), bits)
-                            };
-                            let rhs = if b.bit_width == bits {
-                                b.clone()
-                            } else {
-                                CoreInt::from_signed(b.as_i64(), bits)
-                            };
-                            Self::fold_binary_const(*op, lhs, rhs)
-                        })
-                    }
-                    _ => ValueState::Overdefined,
-                }
-            }
-            InstKind::Call { .. } => ValueState::Overdefined,
-            InstKind::Branch { .. } => panic!("Branch should be handled in visit_branch_inst"),
-            InstKind::GetElementPtr { .. } => ValueState::Overdefined,
-            InstKind::ICmp { op, lhs, rhs } => {
-                let lhs_state = self.get_value_state(*lhs, value_states);
-                let rhs_state = self.get_value_state(*rhs, value_states);
-                let lhs_bits = self.value_int_bits(*lhs);
-                let rhs_bits = self.value_int_bits(*rhs);
-
-                match (lhs_bits, rhs_bits) {
-                    (Some(bits), Some(rhs_bits)) if bits == rhs_bits => {
-                        lhs_state.merge(&rhs_state, |a, b| {
-                            let lhs = if a.bit_width == bits {
-                                a.clone()
-                            } else {
-                                CoreInt::from_signed(a.as_i64(), bits)
-                            };
-                            let rhs = if b.bit_width == bits {
-                                b.clone()
-                            } else {
-                                CoreInt::from_signed(b.as_i64(), bits)
-                            };
-                            Some(CoreInt::new(Self::fold_icmp_const(*op, lhs, rhs) as u64, 1))
-                        })
-                    }
-                    _ => ValueState::Overdefined,
-                }
-            }
-            InstKind::Phi { .. } => panic!("Phi should be handled in visit_phi_inst"),
-            InstKind::Select {
-                cond,
-                then_val,
-                else_val,
-            } => {
-                let cond_state = self.get_value_state(*cond, value_states);
-                let then_state = self.get_value_state(*then_val, value_states);
-                let else_state = self.get_value_state(*else_val, value_states);
-
-                match cond_state {
-                    ValueState::Constant(c) => {
-                        if c.as_u64() != 0 {
-                            then_state
-                        } else {
-                            else_state
+                    match (lhs_bits, rhs_bits) {
+                        (Some(bits), Some(rhs_bits)) if bits == rhs_bits => {
+                            lhs_state.merge(&rhs_state, |a, b| {
+                                let lhs = if a.bit_width == bits {
+                                    a.clone()
+                                } else {
+                                    CoreInt::from_signed(a.as_i64(), bits)
+                                };
+                                let rhs = if b.bit_width == bits {
+                                    b.clone()
+                                } else {
+                                    CoreInt::from_signed(b.as_i64(), bits)
+                                };
+                                Self::fold_binary_const(*op, lhs, rhs)
+                            })
                         }
+                        _ => ValueState::Overdefined,
                     }
-                    _ => then_state.merge(&else_state, |t, e| {
-                        if t == e {
-                            Some(t.clone())
-                        } else {
-                            None
+                }
+                InstKind::Call { .. } => ValueState::Overdefined,
+                InstKind::Branch { .. } => panic!("Branch should be handled in visit_branch_inst"),
+                InstKind::GetElementPtr { .. } => ValueState::Overdefined,
+                InstKind::ICmp { op, lhs, rhs } => {
+                    let lhs_state = self.get_value_state(*lhs, value_states);
+                    let rhs_state = self.get_value_state(*rhs, value_states);
+                    let lhs_bits = self.value_int_bits(*lhs);
+                    let rhs_bits = self.value_int_bits(*rhs);
+
+                    match (lhs_bits, rhs_bits) {
+                        (Some(bits), Some(rhs_bits)) if bits == rhs_bits => {
+                            lhs_state.merge(&rhs_state, |a, b| {
+                                let lhs = if a.bit_width == bits {
+                                    a.clone()
+                                } else {
+                                    CoreInt::from_signed(a.as_i64(), bits)
+                                };
+                                let rhs = if b.bit_width == bits {
+                                    b.clone()
+                                } else {
+                                    CoreInt::from_signed(b.as_i64(), bits)
+                                };
+                                Some(CoreInt::new(Self::fold_icmp_const(*op, lhs, rhs) as u64, 1))
+                            })
                         }
-                    }),
-                }
-            }
-            InstKind::Trunc { value } => {
-                let state = self.get_value_state(*value, value_states);
-                let src_bits = self.value_int_bits(*value);
-                let dst_bits = self.value_int_bits(ValueId::Inst(inst));
-
-                match state {
-                    ValueState::Constant(c) => match (src_bits, dst_bits) {
-                        (Some(src), Some(dst)) if dst <= src => ValueState::Constant(
-                            if c.bit_width == src {
-                                c.trunc_to(dst)
-                            } else {
-                                CoreInt::from_signed(c.as_i64(), src).trunc_to(dst)
-                            },
-                        ),
                         _ => ValueState::Overdefined,
-                    },
-                    other => other,
+                    }
                 }
-            }
-            InstKind::Zext { value } => {
-                let state = self.get_value_state(*value, value_states);
-                let src_bits = self.value_int_bits(*value);
-                let dst_bits = self.value_int_bits(ValueId::Inst(inst));
+                InstKind::Phi { .. } => panic!("Phi should be handled in visit_phi_inst"),
+                InstKind::Select {
+                    cond,
+                    then_val,
+                    else_val,
+                } => {
+                    let cond_state = self.get_value_state(*cond, value_states);
+                    let then_state = self.get_value_state(*then_val, value_states);
+                    let else_state = self.get_value_state(*else_val, value_states);
 
-                match state {
-                    ValueState::Constant(c) => match (src_bits, dst_bits) {
-                        (Some(src), Some(dst)) if src <= dst => ValueState::Constant(
-                            if c.bit_width == src {
-                                c.zero_extend(dst)
+                    match cond_state {
+                        ValueState::Constant(c) => {
+                            if c.as_u64() != 0 {
+                                then_state
                             } else {
-                                CoreInt::from_signed(c.as_i64(), src).zero_extend(dst)
-                            },
-                        ),
-                        _ => ValueState::Overdefined,
-                    },
-                    other => other,
+                                else_state
+                            }
+                        }
+                        _ => then_state.merge(&else_state, |t, e| {
+                            if t == e { Some(t.clone()) } else { None }
+                        }),
+                    }
                 }
-            }
-            InstKind::Sext { value } => {
-                let state = self.get_value_state(*value, value_states);
-                let src_bits = self.value_int_bits(*value);
-                let dst_bits = self.value_int_bits(ValueId::Inst(inst));
+                InstKind::Trunc { value } => {
+                    let state = self.get_value_state(*value, value_states);
+                    let src_bits = self.value_int_bits(*value);
+                    let dst_bits = self.value_int_bits(ValueId::Inst(inst));
 
-                match state {
-                    ValueState::Constant(c) => match (src_bits, dst_bits) {
-                        (Some(src), Some(dst)) if src <= dst => ValueState::Constant(
-                            if c.bit_width == src {
-                                c.sign_extend(dst)
-                            } else {
-                                CoreInt::from_signed(c.as_i64(), src).sign_extend(dst)
-                            },
-                        ),
-                        _ => ValueState::Overdefined,
-                    },
-                    other => other,
+                    match state {
+                        ValueState::Constant(c) => match (src_bits, dst_bits) {
+                            (Some(src), Some(dst)) if dst <= src => {
+                                ValueState::Constant(if c.bit_width == src {
+                                    c.trunc_to(dst)
+                                } else {
+                                    CoreInt::from_signed(c.as_i64(), src).trunc_to(dst)
+                                })
+                            }
+                            _ => ValueState::Overdefined,
+                        },
+                        other => other,
+                    }
                 }
-            }
-            _ => ValueState::Overdefined,
-        };
+                InstKind::Zext { value } => {
+                    let state = self.get_value_state(*value, value_states);
+                    let src_bits = self.value_int_bits(*value);
+                    let dst_bits = self.value_int_bits(ValueId::Inst(inst));
+
+                    match state {
+                        ValueState::Constant(c) => match (src_bits, dst_bits) {
+                            (Some(src), Some(dst)) if src <= dst => {
+                                ValueState::Constant(if c.bit_width == src {
+                                    c.zero_extend(dst)
+                                } else {
+                                    CoreInt::from_signed(c.as_i64(), src).zero_extend(dst)
+                                })
+                            }
+                            _ => ValueState::Overdefined,
+                        },
+                        other => other,
+                    }
+                }
+                InstKind::Sext { value } => {
+                    let state = self.get_value_state(*value, value_states);
+                    let src_bits = self.value_int_bits(*value);
+                    let dst_bits = self.value_int_bits(ValueId::Inst(inst));
+
+                    match state {
+                        ValueState::Constant(c) => match (src_bits, dst_bits) {
+                            (Some(src), Some(dst)) if src <= dst => {
+                                ValueState::Constant(if c.bit_width == src {
+                                    c.sign_extend(dst)
+                                } else {
+                                    CoreInt::from_signed(c.as_i64(), src).sign_extend(dst)
+                                })
+                            }
+                            _ => ValueState::Overdefined,
+                        },
+                        other => other,
+                    }
+                }
+                _ => ValueState::Overdefined,
+            };
 
         self.apply_value_state_change(inst, inst_work_list, old_state, new_state, value_states);
     }
@@ -482,7 +476,11 @@ impl ModuleCore {
     }
 
     fn zero_const_for_const(&self, const_id: ConstId) -> CoreInt {
-        let bit_width = self.const_data(const_id).ty.as_int().map_or(64, |int_ty| int_ty.0);
+        let bit_width = self
+            .const_data(const_id)
+            .ty
+            .as_int()
+            .map_or(64, |int_ty| int_ty.0);
         CoreInt::new(0, bit_width)
     }
 }
