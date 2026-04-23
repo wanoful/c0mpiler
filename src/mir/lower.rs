@@ -1596,7 +1596,7 @@ fn lower_const_data(
 
     match &const_data.kind {
         ConstKind::Int(number) => {
-            let bytes = number.as_u64().to_le_bytes();
+            let bytes = (number.as_i64() as i32).to_le_bytes();
             Ok(bytes[..(type_layout.layout.size as usize)].to_vec())
         }
         ConstKind::Array(elements) => {

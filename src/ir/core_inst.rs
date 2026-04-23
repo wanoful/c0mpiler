@@ -29,6 +29,13 @@ pub enum OperandSlot {
     SextVal,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BlockOperandSlot {
+    BranchThen,
+    BranchElse,
+    PhiIncomingBlock(usize),
+}
+
 #[derive(Debug, Clone, EnumAsInner)]
 pub enum InstKind {
     Binary {
@@ -144,6 +151,22 @@ pub enum ICmpCode {
 }
 
 impl InstKind {
+    pub fn for_each_block_operand(&self, mut f: impl FnMut(BlockId, BlockOperandSlot)) {
+        match self {
+            InstKind::Branch { then_block, cond } => {
+                f(*then_block, BlockOperandSlot::BranchThen);
+                if let Some(cond) = cond {
+                    f(cond.else_block, BlockOperandSlot::BranchElse);
+                }
+            }
+            InstKind::Phi { incomings } => incomings
+                .iter()
+                .enumerate()
+                .for_each(|(i, incoming)| f(incoming.block, BlockOperandSlot::PhiIncomingBlock(i))),
+            _ => {}
+        }
+    }
+
     pub fn for_each_value_operand(&self, mut f: impl FnMut(ValueId, OperandSlot)) {
         match self {
             InstKind::Binary { lhs, rhs, .. } => {
@@ -200,6 +223,22 @@ impl InstKind {
             InstKind::Sext { value } => f(*value, OperandSlot::SextVal),
             InstKind::Unreachable => {}
         }
+    }
+
+    pub fn replace_block_operand(&mut self, slot: BlockOperandSlot, new_block: BlockId) -> BlockId {
+        let block = match (self, slot) {
+            (InstKind::Branch { then_block, .. }, BlockOperandSlot::BranchThen) => then_block,
+            (InstKind::Branch { cond: Some(cond), .. }, BlockOperandSlot::BranchElse) => {
+                &mut cond.else_block
+            }
+            (InstKind::Phi { incomings, .. }, BlockOperandSlot::PhiIncomingBlock(i)) => {
+                &mut incomings[i].block
+            }
+            _ => panic!("Invalid block operand slot for instruction kind"),
+        };
+        let old = *block;
+        *block = new_block;
+        old
     }
 
     pub fn replace_operand(&mut self, slot: OperandSlot, new_value: ValueId) -> ValueId {

@@ -30,7 +30,7 @@ fn my_ir() {
 #[test]
 fn ir_1_asm() {
     let escape_list: [&str; 0] = [];
-    run_test_cases_with_reimu(&escape_list, "RCompiler-Testcases/IR-1", false);
+    run_test_cases_with_reimu(&escape_list, "RCompiler-Testcases/IR-1", true);
 }
 
 fn require_reimu_path() -> String {
@@ -163,7 +163,10 @@ fn run_test_cases_with_reimu(escape_list: &[&str], case_path: &str, stop_at_faul
             generator.visit(&krate);
             generator.opt_merge_return();
             generator.opt_mem2reg();
+            generator.opt_sccp();
+            generator.opt_cfg_simplify();
             generator.opt_adce();
+            generator.opt_cfg_simplify();
 
             ir_time = sub_timer.elapsed();
 

@@ -402,7 +402,13 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     }
 
     pub fn opt_sccp(&mut self) {
-        self.core_module.borrow_mut().opt_sparse_conditional_constant_propagation();
+        self.core_module
+            .borrow_mut()
+            .opt_sparse_conditional_constant_propagation();
+    }
+
+    pub fn opt_cfg_simplify(&mut self) {
+        self.core_module.borrow_mut().opt_cfg_simplify();
     }
 
     pub fn opt_merge_return(&mut self) {

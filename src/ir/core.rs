@@ -1,14 +1,16 @@
-use std::{collections::HashMap, rc::Rc};
+use std::{
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 
 use slotmap::{SlotMap, new_key_type};
 
 use crate::ir::{
     attribute::{Attribute, AttributeSet, FunctionAttributes},
+    core_inst::{BlockOperandSlot, InstKind, OperandSlot, PhiIncoming},
     core_int::CoreInt,
-    core_inst::{InstKind, OperandSlot, PhiIncoming},
     core_value::{ConstKind, GlobalKind},
-    ir_type::{FunctionType, IntType, PtrType, Type},
-    ir_type::{FunctionTypePtr, TypePtr},
+    ir_type::{FunctionType, FunctionTypePtr, IntType, PtrType, Type, TypePtr},
     layout::{TargetDataLayout, TypeLayoutEngine},
 };
 
@@ -75,6 +77,7 @@ pub struct BlockData {
     pub insts: Vec<InstId>,
     pub terminator: Option<InstId>,
     pub parent: FunctionId,
+    pub uses: Vec<BlockUse>,
 }
 
 #[derive(Debug)]
@@ -111,6 +114,12 @@ pub struct ConstData {
 pub struct Use {
     pub user: InstRef,
     pub slot: OperandSlot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BlockUse {
+    pub user: InstRef,
+    pub slot: BlockOperandSlot,
 }
 
 pub enum InstPosition {
@@ -281,6 +290,14 @@ impl ModuleCore {
             ValueId::Global(global_id) => &mut self.globals[global_id].uses,
             ValueId::Const(const_id) => &mut self.consts[const_id].uses,
         }
+    }
+
+    pub(crate) fn block_uses(&self, block_ref: BlockRef) -> &[BlockUse] {
+        &self.block(block_ref).uses
+    }
+
+    pub(crate) fn block_uses_mut(&mut self, block_ref: BlockRef) -> &mut Vec<BlockUse> {
+        &mut self.block_mut(block_ref).uses
     }
 
     fn locate_inst(&self, inst_ref: InstRef) -> InstPosition {
@@ -568,6 +585,7 @@ impl ModuleCore {
             insts: Vec::new(),
             terminator: None,
             parent: func,
+            uses: Vec::new(),
         });
         let block_ref = BlockRef {
             func,
@@ -758,10 +776,53 @@ impl ModuleCore {
         self.func_mut(inst.func).insts.remove(inst.inst);
     }
 
+    pub(crate) fn erase_blocks_from_parent(&mut self, blocks: Vec<BlockRef>) {
+        for &block in blocks.iter() {
+            for inst in self.phis_in_order(block) {
+                self.erase_inst_from_parent_forcely(inst);
+            }
+            for inst in self.insts_in_order(block) {
+                self.erase_inst_from_parent_forcely(inst);
+            }
+            if let Some(term) = self.terminator(block) {
+                self.erase_inst_from_parent_forcely(term);
+            }
+        }
+
+        for block in blocks.iter() {
+            for block_use in self.block_uses(*block).to_vec() {
+                match block_use.slot {
+                    BlockOperandSlot::PhiIncomingBlock(idx) => {
+                        self.phi_remove_incoming_from(block_use.user, idx);
+                    }
+                    _ => panic!("Cannot erase the block because it is still used"),
+                }
+            }
+            self.func_mut(block.func).blocks.remove(block.block);
+        }
+
+        let mut mapping: HashMap<FunctionId, HashSet<BlockId>> = HashMap::new();
+        blocks.iter().for_each(|b| {
+            mapping.entry(b.func).or_default().insert(b.block);
+        });
+        for (func, blocks) in mapping {
+            self.func_mut(func)
+                .block_order
+                .retain(|b| !blocks.contains(b));
+        }
+    }
+
     fn register_inst_use(&mut self, user: InstRef) {
         let kind = self.inst(user).kind.clone();
         kind.for_each_value_operand(|value, slot| {
             self.value_uses_mut(value).push(Use { user, slot });
+        });
+        kind.for_each_block_operand(|block_id, slot| {
+            self.block_uses_mut(BlockRef {
+                func: user.func,
+                block: block_id,
+            })
+            .push(BlockUse { user, slot: slot });
         });
     }
 
@@ -773,6 +834,15 @@ impl ModuleCore {
                 uses.remove(pos);
             }
         });
+        kind.for_each_block_operand(|block_id, slot| {
+            let uses = self.block_uses_mut(BlockRef {
+                func: user.func,
+                block: block_id,
+            });
+            if let Some(pos) = uses.iter().position(|u| u.user == user && u.slot == slot) {
+                uses.remove(pos);
+            }
+        })
     }
 
     fn replace_inst(&mut self, old: InstRef, new: InstRef) {
@@ -853,76 +923,51 @@ impl ModuleCore {
         }
     }
 
-    pub(crate) fn branch_set_then(&mut self, branch: InstRef, new_then: BlockRef) {
-        assert_eq!(branch.func, new_then.func);
-        match &mut self.inst_mut(branch).kind {
-            InstKind::Branch { then_block, .. } => {
-                *then_block = new_then.block;
-            }
-            _ => panic!("Expected a conditional branch instruction"),
+    pub(crate) fn replace_all_block_uses_with(&mut self, old: BlockRef, new: BlockRef) {
+        assert_ne!(old, new, "Cannot replace a value with itself");
+
+        let uses = self.block_uses(old).to_vec();
+        for u in &uses {
+            self.replace_block_operand(u.user, u.slot, new);
         }
     }
 
-    pub(crate) fn branch_set_else(&mut self, branch: InstRef, new_else: BlockRef) {
-        assert_eq!(branch.func, new_else.func);
-        match &mut self.inst_mut(branch).kind {
-            InstKind::Branch {
-                cond: Some(cond_branch),
-                ..
-            } => {
-                cond_branch.else_block = new_else.block;
-            }
-            _ => panic!("Expected a conditional branch instruction"),
-        }
+    pub(crate) fn replace_block_operand(
+        &mut self,
+        inst: InstRef,
+        slot: BlockOperandSlot,
+        new_block: BlockRef,
+    ) {
+        assert_eq!(inst.func, new_block.func);
+        let old_block = self
+            .inst_mut(inst)
+            .kind
+            .replace_block_operand(slot, new_block.block);
+
+        self.block_uses_mut(BlockRef {
+            func: inst.func,
+            block: old_block,
+        })
+        .retain(|u| !(u.user == inst && u.slot == slot));
+        self.block_uses_mut(new_block)
+            .push(BlockUse { user: inst, slot });
     }
 
     pub(crate) fn phi_add_incoming(&mut self, phi: InstRef, block: BlockRef, value: ValueId) {
         assert_eq!(phi.func, block.func);
         match &mut self.inst_mut(phi).kind {
             InstKind::Phi { incomings } => {
-                let slot = OperandSlot::PhiIncomingVal(incomings.len());
+                let idx = incomings.len();
+                let slot = OperandSlot::PhiIncomingVal(idx);
                 incomings.push(PhiIncoming {
                     block: block.block,
                     value,
                 });
                 self.value_uses_mut(value).push(Use { user: phi, slot });
-            }
-            _ => panic!("Expected a phi instruction"),
-        }
-    }
-
-    pub(crate) fn phi_set_incoming_value(
-        &mut self,
-        phi: InstRef,
-        incoming_index: usize,
-        new_value: ValueId,
-    ) {
-        match &mut self.inst_mut(phi).kind {
-            InstKind::Phi { incomings } => {
-                let value = incomings[incoming_index].value;
-                incomings[incoming_index].value = new_value;
-                self.value_uses_mut(value).retain(|u| {
-                    !(u.user == phi && u.slot == OperandSlot::PhiIncomingVal(incoming_index))
-                });
-                self.value_uses_mut(new_value).push(Use {
+                self.block_uses_mut(block).push(BlockUse {
                     user: phi,
-                    slot: OperandSlot::PhiIncomingVal(incoming_index),
+                    slot: BlockOperandSlot::PhiIncomingBlock(idx),
                 });
-            }
-            _ => panic!("Expected a phi instruction"),
-        }
-    }
-
-    pub(crate) fn phi_set_incoming_block(
-        &mut self,
-        phi: InstRef,
-        incoming_index: usize,
-        new_block: BlockRef,
-    ) {
-        assert_eq!(phi.func, new_block.func);
-        match &mut self.inst_mut(phi).kind {
-            InstKind::Phi { incomings } => {
-                incomings[incoming_index].block = new_block.block;
             }
             _ => panic!("Expected a phi instruction"),
         }
@@ -932,12 +977,20 @@ impl ModuleCore {
         match &mut self.inst_mut(phi).kind {
             InstKind::Phi { incomings } => {
                 let value = incomings[incoming_index].value;
+                let block = incomings[incoming_index].block;
                 incomings.remove(incoming_index);
 
                 let cloned = incomings.clone();
 
                 self.value_uses_mut(value).retain(|u| {
                     !(u.user == phi && u.slot == OperandSlot::PhiIncomingVal(incoming_index))
+                });
+                self.block_uses_mut(BlockRef {
+                    func: phi.func,
+                    block,
+                })
+                .retain(|u| {
+                    !(u.user == phi && u.slot == BlockOperandSlot::PhiIncomingBlock(incoming_index))
                 });
 
                 for (i, PhiIncoming { value: id, .. }) in
@@ -978,33 +1031,6 @@ impl ModuleCore {
                 then_block,
             } => vec![block_ref(*then_block)],
             _ => vec![],
-        }
-    }
-
-    pub(crate) fn replace_successor(&mut self, inst: InstRef, old: BlockRef, new: BlockRef) {
-        assert_eq!(inst.func, old.func);
-        assert_eq!(inst.func, new.func);
-        match &mut self.inst_mut(inst).kind {
-            InstKind::Branch {
-                cond: Some(cond_branch),
-                then_block,
-            } => {
-                if cond_branch.else_block == old.block {
-                    cond_branch.else_block = new.block;
-                }
-                if *then_block == old.block {
-                    *then_block = new.block;
-                }
-            }
-            InstKind::Branch {
-                cond: None,
-                then_block,
-            } => {
-                if *then_block == old.block {
-                    *then_block = new.block;
-                }
-            }
-            _ => {}
         }
     }
 }
