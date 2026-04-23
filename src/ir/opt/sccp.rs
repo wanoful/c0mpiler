@@ -5,6 +5,7 @@ use std::{
 
 use crate::ir::{
     core::{BlockId, ConstId, FunctionId, InstRef, ModuleCore, Use, ValueId},
+    core_int::CoreInt,
     core_inst::{BinaryOpcode, CondBranch, ICmpCode, InstKind, PhiIncoming},
     core_value::{ConstKind, GlobalKind},
     ir_type::{Type, VoidType},
@@ -199,44 +200,41 @@ impl ModuleCore {
 
         let new_state = match &self.inst(inst).kind {
             InstKind::Binary { op, lhs, rhs } => {
-                let fold_fn = |a: i64, b: i64| match op {
-                    BinaryOpcode::Add => Some(a + b),
-                    BinaryOpcode::Sub => Some(a - b),
-                    BinaryOpcode::Mul => a.checked_mul(b),
-                    BinaryOpcode::UDiv => (a as u64).checked_div(b as u64).map(|n| n as i64),
-                    BinaryOpcode::SDiv => a.checked_div(b),
-                    BinaryOpcode::URem => (a as u64).checked_rem(b as u64).map(|n| n as i64),
-                    BinaryOpcode::SRem => a.checked_rem(b),
-                    BinaryOpcode::Shl => a.checked_shl(b as u32),
-                    BinaryOpcode::LShr => (a as u64).checked_shr(b as u32).map(|n| n as i64),
-                    BinaryOpcode::AShr => a.checked_shr(b as u32),
-                    BinaryOpcode::And => Some(a & b),
-                    BinaryOpcode::Or => Some(a | b),
-                    BinaryOpcode::Xor => Some(a ^ b),
-                };
                 let lhs_state = self.get_value_state(*lhs, value_states);
                 let rhs_state = self.get_value_state(*rhs, value_states);
-                lhs_state.merge(&rhs_state, fold_fn)
+                let lhs_bits = self.value_int_bits(*lhs);
+                let rhs_bits = self.value_int_bits(*rhs);
+
+                match (lhs_bits, rhs_bits) {
+                    (Some(bits), Some(rhs_bits)) if bits == rhs_bits => {
+                        lhs_state.merge(&rhs_state, |a, b| {
+                            let lhs = CoreInt::from_signed(a, bits);
+                            let rhs = CoreInt::from_signed(b, bits);
+                            Self::fold_binary_const(*op, lhs, rhs).map(CoreInt::to_const_i64)
+                        })
+                    }
+                    _ => ValueState::Overdefined,
+                }
             }
             InstKind::Call { .. } => ValueState::Overdefined,
             InstKind::Branch { .. } => panic!("Branch should be handled in visit_branch_inst"),
             InstKind::GetElementPtr { .. } => ValueState::Overdefined,
             InstKind::ICmp { op, lhs, rhs } => {
-                let fold_fn = |a: i64, b: i64| match op {
-                    ICmpCode::Eq => Some((a == b) as i64),
-                    ICmpCode::Ne => Some((a != b) as i64),
-                    ICmpCode::Ugt => Some((a as u64 > b as u64) as i64),
-                    ICmpCode::Uge => Some((a as u64 >= b as u64) as i64),
-                    ICmpCode::Ult => Some(((a as u64) < b as u64) as i64),
-                    ICmpCode::Ule => Some((a as u64 <= b as u64) as i64),
-                    ICmpCode::Sgt => Some((a > b) as i64),
-                    ICmpCode::Sge => Some((a >= b) as i64),
-                    ICmpCode::Slt => Some((a < b) as i64),
-                    ICmpCode::Sle => Some((a <= b) as i64),
-                };
                 let lhs_state = self.get_value_state(*lhs, value_states);
                 let rhs_state = self.get_value_state(*rhs, value_states);
-                lhs_state.merge(&rhs_state, fold_fn)
+                let lhs_bits = self.value_int_bits(*lhs);
+                let rhs_bits = self.value_int_bits(*rhs);
+
+                match (lhs_bits, rhs_bits) {
+                    (Some(bits), Some(rhs_bits)) if bits == rhs_bits => {
+                        lhs_state.merge(&rhs_state, |a, b| {
+                            let lhs = CoreInt::from_signed(a, bits);
+                            let rhs = CoreInt::from_signed(b, bits);
+                            Some(Self::fold_icmp_const(*op, lhs, rhs) as i64)
+                        })
+                    }
+                    _ => ValueState::Overdefined,
+                }
             }
             InstKind::Phi { .. } => panic!("Phi should be handled in visit_phi_inst"),
             InstKind::Select {
@@ -260,20 +258,56 @@ impl ModuleCore {
                 }
             }
             InstKind::Trunc { value } => {
-                let mut state = self.get_value_state(*value, value_states);
-                let ty = self.value_ty(ValueId::Inst(inst));
-                let bits = ty.as_int().unwrap().0;
+                let state = self.get_value_state(*value, value_states);
+                let src_bits = self.value_int_bits(*value);
+                let dst_bits = self.value_int_bits(ValueId::Inst(inst));
 
-                match &mut state {
-                    ValueState::Constant(c) => {
-                        *c &= (1i64 << bits) - 1;
-                    }
-                    _ => {}
+                match state {
+                    ValueState::Constant(c) => match (src_bits, dst_bits) {
+                        (Some(src), Some(dst)) if dst <= src => {
+                            ValueState::Constant(
+                                CoreInt::from_signed(c, src).trunc_to(dst).to_const_i64(),
+                            )
+                        }
+                        _ => ValueState::Overdefined,
+                    },
+                    other => other,
                 }
-                state
             }
-            InstKind::Zext { value } => self.get_value_state(*value, value_states),
-            InstKind::Sext { value } => self.get_value_state(*value, value_states),
+            InstKind::Zext { value } => {
+                let state = self.get_value_state(*value, value_states);
+                let src_bits = self.value_int_bits(*value);
+                let dst_bits = self.value_int_bits(ValueId::Inst(inst));
+
+                match state {
+                    ValueState::Constant(c) => match (src_bits, dst_bits) {
+                        (Some(src), Some(dst)) if src <= dst => {
+                            ValueState::Constant(
+                                CoreInt::from_signed(c, src).zero_extend(dst).to_const_i64(),
+                            )
+                        }
+                        _ => ValueState::Overdefined,
+                    },
+                    other => other,
+                }
+            }
+            InstKind::Sext { value } => {
+                let state = self.get_value_state(*value, value_states);
+                let src_bits = self.value_int_bits(*value);
+                let dst_bits = self.value_int_bits(ValueId::Inst(inst));
+
+                match state {
+                    ValueState::Constant(c) => match (src_bits, dst_bits) {
+                        (Some(src), Some(dst)) if src <= dst => {
+                            ValueState::Constant(
+                                CoreInt::from_signed(c, src).sign_extend(dst).to_const_i64(),
+                            )
+                        }
+                        _ => ValueState::Overdefined,
+                    },
+                    other => other,
+                }
+            }
             _ => ValueState::Overdefined,
         };
 
@@ -359,6 +393,43 @@ impl ModuleCore {
                 }
             },
             ValueId::Const(const_id) => self.get_const_value(const_id),
+        }
+    }
+
+    fn value_int_bits(&self, value_id: ValueId) -> Option<u8> {
+        self.value_ty(value_id).as_int().map(|int_ty| int_ty.0)
+    }
+
+    fn fold_binary_const(op: BinaryOpcode, lhs: CoreInt, rhs: CoreInt) -> Option<CoreInt> {
+        match op {
+            BinaryOpcode::Add => Some(lhs + rhs),
+            BinaryOpcode::Sub => Some(lhs - rhs),
+            BinaryOpcode::Mul => Some(lhs * rhs),
+            BinaryOpcode::UDiv => lhs.checked_udiv(rhs),
+            BinaryOpcode::SDiv => lhs.checked_sdiv(rhs),
+            BinaryOpcode::URem => lhs.checked_urem(rhs),
+            BinaryOpcode::SRem => lhs.checked_srem(rhs),
+            BinaryOpcode::Shl => lhs.checked_shl(rhs),
+            BinaryOpcode::LShr => lhs.checked_lshr(rhs),
+            BinaryOpcode::AShr => lhs.checked_ashr(rhs),
+            BinaryOpcode::And => Some(lhs & rhs),
+            BinaryOpcode::Or => Some(lhs | rhs),
+            BinaryOpcode::Xor => Some(lhs ^ rhs),
+        }
+    }
+
+    fn fold_icmp_const(op: ICmpCode, lhs: CoreInt, rhs: CoreInt) -> bool {
+        match op {
+            ICmpCode::Eq => lhs.cmp_eq(rhs),
+            ICmpCode::Ne => lhs.cmp_ne(rhs),
+            ICmpCode::Ugt => lhs.cmp_ugt(rhs),
+            ICmpCode::Uge => lhs.cmp_uge(rhs),
+            ICmpCode::Ult => lhs.cmp_ult(rhs),
+            ICmpCode::Ule => lhs.cmp_ule(rhs),
+            ICmpCode::Sgt => lhs.cmp_sgt(rhs),
+            ICmpCode::Sge => lhs.cmp_sge(rhs),
+            ICmpCode::Slt => lhs.cmp_slt(rhs),
+            ICmpCode::Sle => lhs.cmp_sle(rhs),
         }
     }
 }

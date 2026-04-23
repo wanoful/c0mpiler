@@ -9,6 +9,7 @@ pub mod ir_output;
 pub mod ir_type;
 pub mod layout;
 pub mod opt;
+pub mod core_int;
 
 use std::{
     cell::RefCell,
