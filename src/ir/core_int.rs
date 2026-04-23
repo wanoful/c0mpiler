@@ -40,6 +40,14 @@ impl CoreInt {
     }
 
     pub fn as_i64(&self) -> i64 {
+        // For 1-bit integers, treat the value as unsigned to avoid sign extension issues
+        if self.bit_width == 1 {
+            return self.value as i64;
+        }
+        return self.as_i64_raw();
+    }
+
+    pub fn as_i64_raw(&self) -> i64 {
         if self.bit_width == 64 {
             self.value as i64
         } else {
