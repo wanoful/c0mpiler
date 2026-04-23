@@ -351,7 +351,14 @@ impl ModuleCore {
 
     fn ir_print_const(&self, const_id: crate::ir::core::ConstId, helper: &mut PrintHelper) {
         match &self.const_data(const_id).kind {
-            ConstKind::Int(value) => helper.append(&value.to_string()),
+            ConstKind::Int(value) => {
+                let rendered = if value.bit_width == 1 {
+                    value.as_u64().to_string()
+                } else {
+                    value.as_i64().to_string()
+                };
+                helper.append(&rendered);
+            }
             ConstKind::Array(values) => {
                 helper.append("[");
                 for (i, value) in values.iter().enumerate() {

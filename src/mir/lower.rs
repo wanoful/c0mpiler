@@ -144,13 +144,13 @@ fn lower_operand<R: LoweringTarget>(
     if let ValueId::Const(constant) = operand {
         match &module.const_data(constant).kind {
             ConstKind::Int(number) => {
-                if *number == 0 {
+                if number.as_u64() == 0 {
                     return Ok(Register::Physical(R::zero_reg()));
                 }
                 let vreg = machine_function.new_vreg();
                 out.push(R::MachineInst::load_imm(
                     Register::Virtual(vreg),
-                    *number as i32,
+                    number.as_i64() as i32,
                 ));
                 return Ok(Register::Virtual(vreg));
             }
@@ -312,7 +312,9 @@ fn emit_add_offset<T: LoweringTarget>(
     if let ValueId::Const(constant) = index
         && let ConstKind::Int(number) = &module.const_data(constant).kind
     {
-        let imm = (*number as i32).checked_mul(stride as i32).unwrap();
+        let imm = (number.as_i64() as i32)
+            .checked_mul(stride as i32)
+            .unwrap();
         if (-2048..=2047).contains(&imm) {
             let result_reg = Register::Virtual(machine_function.new_vreg());
             out.push(T::emit_addi(result_reg, base, imm));
@@ -828,7 +830,7 @@ impl<T: LoweringTarget> Lowerer<T> {
                 {
                     let rd_vreg = self.ensure_inst_vreg(instruction, machine_function, state);
                     let rd = Register::Virtual(rd_vreg);
-                    let imm = *number as i32;
+                    let imm = number.as_i64() as i32;
                     let lowered = match op {
                         BinaryOpcode::Add if (-2048..=2047).contains(&imm) => {
                             Some(T::emit_addi(rd, rs1, imm))
@@ -1119,7 +1121,7 @@ impl<T: LoweringTarget> Lowerer<T> {
                                     && let ConstKind::Int(number) =
                                         &module.const_data(constant).kind
                                 {
-                                    *number as usize
+                                    number.as_u64() as usize
                                 } else {
                                     return Err(LowerError::UnimplementedInstruction {
                                         function: state.function_name.clone(),
@@ -1594,7 +1596,7 @@ fn lower_const_data(
 
     match &const_data.kind {
         ConstKind::Int(number) => {
-            let bytes = number.to_le_bytes();
+            let bytes = number.as_u64().to_le_bytes();
             Ok(bytes[..(type_layout.layout.size as usize)].to_vec())
         }
         ConstKind::Array(elements) => {

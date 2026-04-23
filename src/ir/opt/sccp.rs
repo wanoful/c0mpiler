@@ -11,19 +11,23 @@ use crate::ir::{
     ir_type::{Type, VoidType},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ValueState {
     Unknown,
-    Constant(i64),
+    Constant(CoreInt),
     Overdefined,
 }
 
 impl ValueState {
-    fn merge(&self, other: &ValueState, merge_fn: impl Fn(i64, i64) -> Option<i64>) -> ValueState {
+    fn merge(
+        &self,
+        other: &ValueState,
+        merge_fn: impl Fn(&CoreInt, &CoreInt) -> Option<CoreInt>,
+    ) -> ValueState {
         match (self, other) {
             (ValueState::Unknown, ValueState::Unknown) => ValueState::Unknown,
             (ValueState::Constant(c1), ValueState::Constant(c2)) => {
-                merge_fn(*c1, *c2).map_or(ValueState::Overdefined, ValueState::Constant)
+                merge_fn(c1, c2).map_or(ValueState::Overdefined, ValueState::Constant)
             }
             _ => ValueState::Overdefined,
         }
@@ -153,7 +157,11 @@ impl ModuleCore {
             })
             .fold(ValueState::Unknown, |acc, value| {
                 acc.merge(&self.get_value_state(*value, value_states), |c1, c2| {
-                    if c1 == c2 { Some(c1) } else { None }
+                    if c1 == c2 {
+                        Some(c1.clone())
+                    } else {
+                        None
+                    }
                 })
             });
 
@@ -169,9 +177,21 @@ impl ModuleCore {
         value_states: &mut HashMap<InstRef, ValueState>,
     ) {
         if old_state != new_state {
-            if let ValueState::Constant(c) = new_state {
+            if let ValueState::Constant(c) = &new_state {
                 let ty = self.value_ty(ValueId::Inst(inst));
-                let const_id = self.add_const(ty.clone(), ConstKind::Int(c));
+                let int_value = if let Some(int_ty) = ty.as_int() {
+                    let bits = int_ty.0;
+                    if c.bit_width == bits {
+                        c.clone()
+                    } else if c.bit_width > bits {
+                        c.clone().trunc_to(bits)
+                    } else {
+                        c.clone().zero_extend(bits)
+                    }
+                } else {
+                    c.clone()
+                };
+                let const_id = self.add_const(ty.clone(), ConstKind::Int(int_value));
                 self.replace_all_uses_with(ValueId::Inst(inst), ValueId::Const(const_id));
             }
 
@@ -208,9 +228,17 @@ impl ModuleCore {
                 match (lhs_bits, rhs_bits) {
                     (Some(bits), Some(rhs_bits)) if bits == rhs_bits => {
                         lhs_state.merge(&rhs_state, |a, b| {
-                            let lhs = CoreInt::from_signed(a, bits);
-                            let rhs = CoreInt::from_signed(b, bits);
-                            Self::fold_binary_const(*op, lhs, rhs).map(CoreInt::to_const_i64)
+                            let lhs = if a.bit_width == bits {
+                                a.clone()
+                            } else {
+                                CoreInt::from_signed(a.as_i64(), bits)
+                            };
+                            let rhs = if b.bit_width == bits {
+                                b.clone()
+                            } else {
+                                CoreInt::from_signed(b.as_i64(), bits)
+                            };
+                            Self::fold_binary_const(*op, lhs, rhs)
                         })
                     }
                     _ => ValueState::Overdefined,
@@ -228,9 +256,17 @@ impl ModuleCore {
                 match (lhs_bits, rhs_bits) {
                     (Some(bits), Some(rhs_bits)) if bits == rhs_bits => {
                         lhs_state.merge(&rhs_state, |a, b| {
-                            let lhs = CoreInt::from_signed(a, bits);
-                            let rhs = CoreInt::from_signed(b, bits);
-                            Some(Self::fold_icmp_const(*op, lhs, rhs) as i64)
+                            let lhs = if a.bit_width == bits {
+                                a.clone()
+                            } else {
+                                CoreInt::from_signed(a.as_i64(), bits)
+                            };
+                            let rhs = if b.bit_width == bits {
+                                b.clone()
+                            } else {
+                                CoreInt::from_signed(b.as_i64(), bits)
+                            };
+                            Some(CoreInt::new(Self::fold_icmp_const(*op, lhs, rhs) as u64, 1))
                         })
                     }
                     _ => ValueState::Overdefined,
@@ -248,13 +284,19 @@ impl ModuleCore {
 
                 match cond_state {
                     ValueState::Constant(c) => {
-                        if c != 0 {
+                        if c.as_u64() != 0 {
                             then_state
                         } else {
                             else_state
                         }
                     }
-                    _ => then_state.merge(&else_state, |t, e| if t == e { Some(t) } else { None }),
+                    _ => then_state.merge(&else_state, |t, e| {
+                        if t == e {
+                            Some(t.clone())
+                        } else {
+                            None
+                        }
+                    }),
                 }
             }
             InstKind::Trunc { value } => {
@@ -264,11 +306,13 @@ impl ModuleCore {
 
                 match state {
                     ValueState::Constant(c) => match (src_bits, dst_bits) {
-                        (Some(src), Some(dst)) if dst <= src => {
-                            ValueState::Constant(
-                                CoreInt::from_signed(c, src).trunc_to(dst).to_const_i64(),
-                            )
-                        }
+                        (Some(src), Some(dst)) if dst <= src => ValueState::Constant(
+                            if c.bit_width == src {
+                                c.trunc_to(dst)
+                            } else {
+                                CoreInt::from_signed(c.as_i64(), src).trunc_to(dst)
+                            },
+                        ),
                         _ => ValueState::Overdefined,
                     },
                     other => other,
@@ -281,11 +325,13 @@ impl ModuleCore {
 
                 match state {
                     ValueState::Constant(c) => match (src_bits, dst_bits) {
-                        (Some(src), Some(dst)) if src <= dst => {
-                            ValueState::Constant(
-                                CoreInt::from_signed(c, src).zero_extend(dst).to_const_i64(),
-                            )
-                        }
+                        (Some(src), Some(dst)) if src <= dst => ValueState::Constant(
+                            if c.bit_width == src {
+                                c.zero_extend(dst)
+                            } else {
+                                CoreInt::from_signed(c.as_i64(), src).zero_extend(dst)
+                            },
+                        ),
                         _ => ValueState::Overdefined,
                     },
                     other => other,
@@ -298,11 +344,13 @@ impl ModuleCore {
 
                 match state {
                     ValueState::Constant(c) => match (src_bits, dst_bits) {
-                        (Some(src), Some(dst)) if src <= dst => {
-                            ValueState::Constant(
-                                CoreInt::from_signed(c, src).sign_extend(dst).to_const_i64(),
-                            )
-                        }
+                        (Some(src), Some(dst)) if src <= dst => ValueState::Constant(
+                            if c.bit_width == src {
+                                c.sign_extend(dst)
+                            } else {
+                                CoreInt::from_signed(c.as_i64(), src).sign_extend(dst)
+                            },
+                        ),
                         _ => ValueState::Overdefined,
                     },
                     other => other,
@@ -326,7 +374,7 @@ impl ModuleCore {
                     let cond_state = self.get_value_state(cond, value_states);
                     match cond_state {
                         ValueState::Constant(c) => {
-                            let new_target = if c != 0 {
+                            let new_target = if c.as_u64() != 0 {
                                 cfg_work_list.push(then_block);
                                 then_block
                             } else {
@@ -361,9 +409,9 @@ impl ModuleCore {
 
     fn get_const_value(&self, const_id: ConstId) -> ValueState {
         match self.const_data(const_id).kind {
-            ConstKind::Int(i) => ValueState::Constant(i),
-            ConstKind::Null => ValueState::Constant(0),
-            ConstKind::Undef => ValueState::Constant(0),
+            ConstKind::Int(ref i) => ValueState::Constant(i.clone()),
+            ConstKind::Null => ValueState::Constant(self.zero_const_for_const(const_id)),
+            ConstKind::Undef => ValueState::Constant(self.zero_const_for_const(const_id)),
             _ => todo!(),
         }
     }
@@ -431,5 +479,10 @@ impl ModuleCore {
             ICmpCode::Slt => lhs.cmp_slt(rhs),
             ICmpCode::Sle => lhs.cmp_sle(rhs),
         }
+    }
+
+    fn zero_const_for_const(&self, const_id: ConstId) -> CoreInt {
+        let bit_width = self.const_data(const_id).ty.as_int().map_or(64, |int_ty| int_ty.0);
+        CoreInt::new(0, bit_width)
     }
 }

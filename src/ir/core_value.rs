@@ -1,10 +1,13 @@
 use enum_as_inner::EnumAsInner;
 
-use crate::ir::core::{ConstId, FunctionId};
+use crate::ir::{
+    core::{ConstId, FunctionId},
+    core_int::CoreInt,
+};
 
 #[derive(Debug)]
 pub enum ConstKind {
-    Int(i64),
+    Int(CoreInt),
     Array(Vec<ConstId>),
     Struct(Vec<ConstId>),
     String(String),

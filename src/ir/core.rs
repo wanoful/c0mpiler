@@ -4,6 +4,7 @@ use slotmap::{SlotMap, new_key_type};
 
 use crate::ir::{
     attribute::{Attribute, AttributeSet, FunctionAttributes},
+    core_int::CoreInt,
     core_inst::{InstKind, OperandSlot, PhiIncoming},
     core_value::{ConstKind, GlobalKind},
     ir_type::{FunctionType, IntType, PtrType, Type},
@@ -428,7 +429,10 @@ impl ModuleCore {
     }
 
     pub fn add_int_const(&mut self, bits: u8, value: i64) -> ConstId {
-        self.add_const(Rc::new(Type::Int(IntType(bits))), ConstKind::Int(value))
+        self.add_const(
+            Rc::new(Type::Int(IntType(bits))),
+            ConstKind::Int(CoreInt::from_signed(value, bits)),
+        )
     }
 
     pub fn add_i1_const(&mut self, value: bool) -> ConstId {
