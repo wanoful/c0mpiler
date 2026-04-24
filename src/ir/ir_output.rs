@@ -197,9 +197,6 @@ impl ModuleCore {
         for block in self.blocks_in_order(func) {
             let raw = self.block(block).name.clone();
             helper.intern_core_block_name(block, raw);
-        }
-
-        for block in self.blocks_in_order(func) {
             for inst in self.phis_in_order(block) {
                 if !self.inst(inst).ty.is_void() {
                     let raw = self.inst(inst).name.clone();
