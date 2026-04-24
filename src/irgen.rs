@@ -404,6 +404,26 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     pub fn opt_merge_return(&mut self) {
         self.module.borrow_mut().opt_merge_return();
     }
+
+    pub fn opt_function_inline(&mut self) {
+        self.module.borrow_mut().opt_function_inline();
+    }
+
+    pub fn opt_all(&mut self) {
+        self.opt_merge_return();
+        self.opt_mem2reg();
+        self.opt_sccp();
+        self.opt_cfg_simplify();
+        self.opt_adce();
+        self.opt_cfg_simplify();
+        self.opt_function_inline();
+        self.opt_merge_return();
+        self.opt_mem2reg();
+        self.opt_sccp();
+        self.opt_cfg_simplify();
+        self.opt_adce();
+        self.opt_cfg_simplify();
+    }
 }
 
 fn add_builtin_struct_types(context: &LLVMContext) {

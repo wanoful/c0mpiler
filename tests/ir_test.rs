@@ -182,12 +182,7 @@ fn run_test_cases(
                 },
             );
             generator.visit(&krate);
-            generator.opt_merge_return();
-            generator.opt_mem2reg();
-            generator.opt_sccp();
-            generator.opt_cfg_simplify();
-            generator.opt_adce();
-            generator.opt_cfg_simplify();
+            generator.opt_all();
             generator.print()
         })) {
             Ok(ir) => ir,

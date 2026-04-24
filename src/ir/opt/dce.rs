@@ -128,7 +128,7 @@ impl ModuleCore {
         }
     }
 
-    fn func_aggressive_dead_code_elimination(&mut self, id: FunctionId) {
+    pub(crate) fn func_aggressive_dead_code_elimination(&mut self, id: FunctionId) {
         let function = self.func(id);
         if function.is_declare {
             return;

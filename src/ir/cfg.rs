@@ -1,10 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use std::{collections::{HashMap, HashSet}, rc::Rc};
 
 use enum_as_inner::EnumAsInner;
 
 use crate::ir::{
-    core::{BlockId, FunctionId, ModuleCore},
-    core_inst::CondBranch,
+    core::{BlockId, BlockRef, BlockUse, FunctionId, InstRef, ModuleCore},
+    core_inst::{CondBranch, InstKind},
+    ir_type::{Type, TypePtr, VoidType},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumAsInner)]
@@ -290,5 +291,55 @@ impl ModuleCore {
             succs,
             preds,
         }
+    }
+
+    // Split the block containing the given instruction into two blocks, and move all the following instructions to the new block.
+    pub(super) fn split_block_at(&mut self, inst: InstRef, add_terminator: bool) -> BlockRef {
+        let func = inst.func;
+        let parent = self.inst(inst).parent.unwrap();
+        let block = self.block(parent);
+        
+        let phi_uses = block.uses.iter().filter(|u| {
+            self.inst(u.user).kind.is_phi()
+        }).cloned().collect::<Vec<_>>();
+
+        let position = block
+            .insts
+            .iter()
+            .position(|&i| i == inst.inst)
+            .expect("Instruction not found in its parent block");
+
+        let new_block = self.append_block(func, None);
+
+        for inst in self.block(parent).insts.clone().into_iter().skip(position) {
+            let inst_ref = InstRef { func, inst };
+            self.detach_inst(inst_ref);
+            self.append_inst(new_block, inst_ref);
+        }
+
+        if let Some(term) = self.block(parent).terminator {
+            self.detach_inst(InstRef { func, inst: term });
+            self.set_terminator(new_block, InstRef { func, inst: term });
+        }
+
+        for BlockUse{ user, slot } in phi_uses {
+            self.replace_block_operand(user, slot, new_block);
+        }
+
+        if add_terminator {
+            let jump = self.new_inst(
+                func,
+                TypePtr::new(Type::Void(VoidType)),
+                InstKind::Branch {
+                    then_block: new_block.block,
+                    cond: None,
+                },
+                None,
+            );
+    
+            self.set_terminator(parent, jump);
+        }
+
+        new_block
     }
 }

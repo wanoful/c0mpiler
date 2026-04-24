@@ -56,7 +56,7 @@ impl ModuleCore {
         }
     }
 
-    fn func_sparse_conditional_constant_propagation(&mut self, id: FunctionId) {
+    pub(crate) fn func_sparse_conditional_constant_propagation(&mut self, id: FunctionId) {
         let function = self.func(id);
         if function.is_declare {
             return;

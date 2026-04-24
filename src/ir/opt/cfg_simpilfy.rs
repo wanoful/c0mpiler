@@ -13,7 +13,7 @@ impl ModuleCore {
         }
     }
 
-    fn func_cfg_simplify(&mut self, id: FunctionId) {
+    pub(crate)  fn func_cfg_simplify(&mut self, id: FunctionId) {
         let function = self.func(id);
         if function.is_declare {
             return;
