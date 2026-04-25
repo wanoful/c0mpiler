@@ -409,9 +409,18 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         self.module.borrow_mut().opt_function_inline();
     }
 
+    pub fn opt_algebraic_simplification(&mut self) {
+        self.module.borrow_mut().opt_algebraic_simplification();
+    }
+
+    pub fn opt_licm(&mut self) {
+        self.module.borrow_mut().opt_licm();
+    }
+
     pub fn opt_all(&mut self) {
         self.opt_merge_return();
         self.opt_mem2reg();
+        self.opt_algebraic_simplification();
         self.opt_sccp();
         self.opt_cfg_simplify();
         self.opt_adce();
@@ -419,6 +428,7 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         self.opt_function_inline();
         self.opt_merge_return();
         self.opt_mem2reg();
+        self.opt_algebraic_simplification();
         self.opt_sccp();
         self.opt_cfg_simplify();
         self.opt_adce();
