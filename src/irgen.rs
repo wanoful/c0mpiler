@@ -214,7 +214,6 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                 let mut ret_ty = self.transform_interned_ty_faithfully(*ret_intern);
                 let mut arg_tys = Vec::new();
 
-                let i32_type = self.context.i32_type();
                 let ptr_type = self.context.ptr_type();
 
                 for arg_intern in arg_interns {
@@ -227,7 +226,7 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                         && name == "fat_ptr"
                     {
                         arg_tys.push(ptr_type.clone().into());
-                        arg_tys.push(i32_type.clone().into());
+                        arg_tys.push(self.context.ptr_width_int_type().into());
                     } else {
                         arg_tys.push(arg_ty);
                     }

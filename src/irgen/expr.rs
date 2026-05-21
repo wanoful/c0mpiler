@@ -281,20 +281,30 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     pub(crate) fn special_method_call(&mut self, kind: ValueKind) -> CoreValueContainer {
         match kind {
             ValueKind::Normal(..) => impossible!(),
-            ValueKind::LenMethod(len) => CoreValueContainer {
-                value: ValueId::Const(self.module.borrow_mut().add_i32_const(len)),
-                kind: CoreContainerKind::Raw { fat: None },
-            },
+            ValueKind::LenMethod(len) => {
+                let ptr_bits = self.context.target_layout().pointer_size as u8 * 8;
+                CoreValueContainer {
+                    value: ValueId::Const(
+                        self.module.borrow_mut().add_int_const(ptr_bits, len as i64),
+                    ),
+                    kind: CoreContainerKind::Raw { fat: None },
+                }
+            }
         }
     }
 
     pub(crate) fn special_method_call_core(&mut self, kind: ValueKind) -> CoreValueContainer {
         match kind {
             ValueKind::Normal(..) => impossible!(),
-            ValueKind::LenMethod(len) => CoreValueContainer {
-                value: ValueId::Const(self.module.borrow_mut().add_i32_const(len)),
-                kind: CoreContainerKind::Raw { fat: None },
-            },
+            ValueKind::LenMethod(len) => {
+                let ptr_bits = self.context.target_layout().pointer_size as u8 * 8;
+                CoreValueContainer {
+                    value: ValueId::Const(
+                        self.module.borrow_mut().add_int_const(ptr_bits, len as i64),
+                    ),
+                    kind: CoreContainerKind::Raw { fat: None },
+                }
+            }
         }
     }
 }
