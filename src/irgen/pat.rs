@@ -23,7 +23,10 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
             },
         });
 
-        let ty = self.get_value_type(&right_ptr);
+        let ty = self.analyzer
+            .get_expr_type_opt(&self_id)
+            .map(|intern| self.transform_interned_ty_faithfully(intern))
+            .unwrap_or_else(|| self.get_value_type(&right_ptr));
         let value = if matches!(by_ref, ByRef::Yes(_)) {
             let ptr = self.build_alloca(self.context.ptr_type().into(), Some(&ident.symbol.0));
             let stored = self.get_value_ptr(right_ptr);

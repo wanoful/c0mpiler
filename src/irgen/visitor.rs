@@ -795,13 +795,20 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
                 ),
                 kind: CoreContainerKind::Raw { fat: None },
             },
-            LitKind::Integer => CoreValueContainer {
-                value: ValueId::Const(
-                    self.module
-                        .borrow_mut()
-                        .add_i32_const(*constant.as_constant_int().unwrap()),
-                ),
-                kind: CoreContainerKind::Raw { fat: None },
+            LitKind::Integer => {
+                let bits = self.analyzer
+                    .get_expr_type_opt(&extra.self_id)
+                    .map(|intern| self.transform_interned_ty_faithfully(intern))
+                    .and_then(|ty| ty.as_int().map(|i| i.0))
+                    .unwrap_or(32);
+                CoreValueContainer {
+                    value: ValueId::Const(
+                        self.module
+                            .borrow_mut()
+                            .add_int_const(bits, *constant.as_constant_int().unwrap() as i64),
+                    ),
+                    kind: CoreContainerKind::Raw { fat: None },
+                }
             },
             LitKind::Str | LitKind::StrRaw(_) => {
                 let string = constant.as_constant_string().unwrap();
@@ -819,7 +826,10 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
                     value: ValueId::Global(global),
                     kind: CoreContainerKind::Raw {
                         fat: Some(ValueId::Const(
-                            self.module.borrow_mut().add_i32_const(string.len() as u32),
+                            self.module.borrow_mut().add_int_const(
+                                self.context.target_layout().pointer_size as u8 * 8,
+                                string.len() as i64,
+                            ),
                         )),
                     },
                 }
@@ -846,7 +856,7 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
         } else if src_bits == target_bits {
             expr_raw
         } else {
-            impossible!()
+            ValueId::Inst(self.builder.build_trunc(expr_raw, ty.clone(), None))
         };
         self.set_expr_value(
             extra.self_id,
