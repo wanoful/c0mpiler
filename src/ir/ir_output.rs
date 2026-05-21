@@ -521,25 +521,25 @@ impl ModuleCore {
             InstKind::PtrToInt { ptr } => {
                 helper.append_white("ptrtoint");
                 self.ir_print_typed_value(*ptr, helper);
-                helper.append_white("to");
+                helper.append(" to ");
                 inst_data.ty.as_ref().ir_print(helper);
             }
             InstKind::Trunc { value } => {
                 helper.append_white("trunc");
                 self.ir_print_typed_value(*value, helper);
-                helper.append_white("to");
+                helper.append(" to ");
                 inst_data.ty.as_ref().ir_print(helper);
             }
             InstKind::Zext { value } => {
                 helper.append_white("zext");
                 self.ir_print_typed_value(*value, helper);
-                helper.append_white("to");
+                helper.append(" to ");
                 inst_data.ty.as_ref().ir_print(helper);
             }
             InstKind::Sext { value } => {
                 helper.append_white("sext");
                 self.ir_print_typed_value(*value, helper);
-                helper.append_white("to");
+                helper.append(" to ");
                 inst_data.ty.as_ref().ir_print(helper);
             }
             InstKind::Branch { then_block, cond } => {
