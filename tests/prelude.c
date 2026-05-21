@@ -2,7 +2,6 @@ typedef unsigned int uint32_t;
 typedef int int32_t;
 typedef unsigned long size_t;
 
-// External function declarations
 extern int sprintf(char *str, const char *format, ...);
 extern int printf(const char *format, ...);
 extern void *malloc(size_t size);
@@ -27,7 +26,7 @@ typedef struct String String;
 void to_string(String *string, uint32_t *self) {
   char *buffer = malloc(16);
   sprintf(buffer, "%u", *self);
-  uint32_t length = strlen(buffer); // For the return value of sprintf is not correctly implemented.
+  uint32_t length = strlen(buffer);
   string->length = length;
   string->data = buffer;
 }
@@ -35,26 +34,21 @@ void to_string(String *string, uint32_t *self) {
 void string_plus(String *ret, String *self, char *data, uint32_t length) {
   uint32_t new_length = self->length + length;
   char *new_data = malloc(new_length);
-  for (int i = 0; i < self->length; i++) {
+  for (int i = 0; i < self->length; i++)
     new_data[i] = self->data[i];
-  }
-  for (int i = 0; i < length; i++) {
+  for (int i = 0; i < length; i++)
     new_data[i + self->length] = data[i];
-  }
   ret->data = new_data;
   ret->length = new_length;
 }
 
 void print(char *text, uint32_t n) {
-  for (uint32_t i = 0; i < n; i++) {
+  for (uint32_t i = 0; i < n; i++)
     putchar(text[i]);
-  }
 }
 
 void println(char *text, uint32_t n) {
-  for (uint32_t i = 0; i < n; i++) {
-    putchar(text[i]);
-  }
+  print(text, n);
   putchar('\n');
 }
 

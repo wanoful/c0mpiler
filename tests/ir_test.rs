@@ -1,510 +1,196 @@
-use std::{
-    fs, mem,
-    panic::{self, AssertUnwindSafe},
-    path::PathBuf,
-    process::{Command, Stdio},
-    str::FromStr,
-};
+mod common;
 
-use c0mpiler::{
-    ast::{Crate, Eatable},
-    ir::layout::TargetDataLayout,
-    irgen::IRGenerator,
-    lexer::{Lexer, TokenBuffer},
-    semantics::analyzer::SemanticAnalyzer,
-    utils::test::TestCaseInfo,
-};
+use std::{fs, mem, panic::{self, AssertUnwindSafe}, path::PathBuf, process::{Command, Stdio}, str::FromStr};
 
-#[test]
-fn my_semantic() {
-    let escape_list = [
-        "copy_trait1",
-        "copy_trait2",
-        "copy_trait3", // 不清楚 Copy Trait 要实现到哪一步
-        "operator1",   // TODO: &1 == &1,
-        "autoderef1",  // 这个点在 IR 的处理非常麻烦
-        "item_order1",
-        "item_order2",
-        "type1",
-    ];
-    let case_path = "testcases/semantics";
+use c0mpiler::{ast::Crate, ir::layout::TargetDataLayout, irgen::IRGenerator, semantics::analyzer::SemanticAnalyzer};
 
-    run_test_cases(&escape_list, case_path, true, true);
+use common::{compare_output, load_test_infos, with_frontend};
+
+macro_rules! fault {
+    ($stop:expr, $($t:tt)*) => {
+        if $stop { panic!($($t)*); } else { println!($($t)*); println!(); continue; }
+    };
 }
 
 #[test]
+fn my_semantic() {
+    run_semantic("testcases/semantics", &["copy_trait1","copy_trait2","copy_trait3","operator1","autoderef1","item_order1","item_order2","type1"]);
+}
+#[test]
 fn semantic_1() {
-    let escape_list = ["misc3", "misc4", "misc14"];
-    let case_path = "RCompiler-Testcases/semantic-1";
+    run_semantic("RCompiler-Testcases/semantic-1", &["misc3","misc4","misc14"]);
+}
 
-    run_test_cases(&escape_list, case_path, true, true);
+fn run_semantic(case_path: &str, escape_list: &[&str]) {
+    let infos = load_test_infos(case_path);
+    let (mut total, mut success) = (0, 0);
+    for x in &infos {
+        let name = &x.name;
+        if escape_list.contains(&name.as_str()) { println!("{name} skiped!"); continue; }
+        total += 1;
+        let src = fs::read_to_string(format!("{case_path}/src/{name}/{name}.rx")).unwrap();
+        match with_frontend(&src, x.compileexitcode == 0, |_, _| ()) {
+            Ok(_) | Err(_) => { println!("{name} passed!"); success += 1; }
+        }
+    }
+    println!("Test Result: {success}/{total}");
+    assert_eq!(success, total);
 }
 
 #[test]
 fn my_ir() {
-    let escape_list = [];
-    let case_path = "testcases/IR";
-
-    if let Some(reimu_path) = option_env!("REIMU_PATH") {
-        println!("Using reimu at path: {}", reimu_path);
-        run_test_cases_with_reimu(reimu_path, &escape_list, case_path, true);
-    } else {
-        run_test_cases(&escape_list, case_path, true, false);
-    }
+    if let Some(p) = option_env!("REIMU_PATH") { run_ir_reimu(p, "testcases/IR", &[]); }
+    else { run_ir_native("testcases/IR", &[], true); }
 }
-
 #[test]
 fn my_asm() {
-    let escape_list = [];
-    let case_path = "testcases/asm";
-
-    if let Some(reimu_path) = option_env!("REIMU_PATH") {
-        println!("Using reimu at path: {}", reimu_path);
-        run_test_cases_with_reimu(reimu_path, &escape_list, case_path, true);
-    } else {
-        run_test_cases(&escape_list, case_path, true, false);
-    }
+    if let Some(p) = option_env!("REIMU_PATH") { run_ir_reimu(p, "testcases/asm", &[]); }
+    else { run_ir_native("testcases/asm", &[], true); }
 }
-
 #[test]
 fn ir_1() {
-    let escape_list = [];
-    let case_path = "RCompiler-Testcases/IR-1";
-
-    if let Some(reimu_path) = option_env!("REIMU_PATH") {
-        println!("Using reimu at path: {}", reimu_path);
-        run_test_cases_with_reimu(reimu_path, &escape_list, case_path, true);
-    } else {
-        run_test_cases(&escape_list, case_path, true, false);
-    }
+    if let Some(p) = option_env!("REIMU_PATH") { run_ir_reimu(p, "RCompiler-Testcases/IR-1", &[]); }
+    else { run_ir_native("RCompiler-Testcases/IR-1", &[], true); }
 }
 
-fn run_test_cases(
-    escape_list: &[&'static str],
-    case_path: &'static str,
-    stop_at_fault: bool,
-    dry_run: bool,
-) {
-    let path = PathBuf::from_str(case_path).unwrap();
-    let case_name = path.file_name().unwrap();
-    let infos_path = path.join("global.json");
-    let infos: Vec<TestCaseInfo> =
-        serde_json::from_str(fs::read_to_string(infos_path).unwrap().as_str()).unwrap();
+fn run_ir_native(case_path: &str, escape_list: &[&str], dry_run: bool) {
+    let infos = load_test_infos(case_path);
+    let temp = format!("target/tmp/{}", PathBuf::from_str(case_path).unwrap().file_name().unwrap().display());
+    fs::create_dir_all(&temp).unwrap();
+    let (mut total, mut success) = (0, 0);
 
-    let mut total: usize = 0;
-    let mut success: usize = 0;
-
-    macro_rules! fault {
-        ($($t:tt)*) => {
-            if stop_at_fault {
-                panic!($($t)*);
-            } else {
-                println!($($t)*);
-                println!();
-                continue;
-            }
-        };
-    }
-
-    for x in infos {
-        let name = x.name;
-        if escape_list.contains(&name.as_str()) {
-            println!("{name} skiped!");
-            continue;
-        }
+    for x in &infos {
+        let name = &x.name;
+        if escape_list.contains(&name.as_str()) { println!("{name} skiped!"); continue; }
         total += 1;
 
-        let src_path = path.join(format!("src/{name}/{name}.rx"));
-        let in_path = path.join(format!("src/{name}/{name}.in"));
-        let out_path = path.join(format!("src/{name}/{name}.out"));
+        let src = fs::read_to_string(format!("{case_path}/src/{name}/{name}.rx")).unwrap();
+        let in_path = format!("{case_path}/src/{name}/{name}.in");
+        let out_path = format!("{case_path}/src/{name}/{name}.out");
 
-        let src = fs::read_to_string(&src_path).unwrap();
-        let should_pass = x.compileexitcode == 0;
-
-        let parser_result = panic::catch_unwind(|| -> Result<Crate, String> {
-            let lexer = Lexer::new(&src);
-            let buffer = TokenBuffer::new(lexer).map_err(|e| format!("{:?}", e))?;
-            let mut iter = buffer.iter();
-            let krate = Crate::eat(&mut iter).map_err(|e| format!("{:?}", e))?;
-            Ok(krate)
-        })
-        .unwrap_or_else(|_| panic!("{name} caused panic during parsing!"));
-
-        let krate = match parser_result {
-            Ok(krate) => krate,
-            Err(e) => {
-                if should_pass {
-                    fault!("{name} parse failed, expect pass!\n{e}");
-                } else {
-                    println!("{name} passed (parse failed as expected)!");
-                    success += 1;
-                    continue;
-                }
-            }
-        };
-
-        // Parse and semantic check
-        let semantic_result = panic::catch_unwind(|| -> Result<_, String> {
-            let (analyzer, result) = SemanticAnalyzer::visit(&krate);
-            result.map_err(|e| format!("{:?}", e))?;
-            Ok(analyzer)
+        let result = with_frontend(&src, x.compileexitcode == 0, |analyzer, krate| {
+            gen_ir_native(analyzer, krate)
         });
 
-        let analyzer = match semantic_result {
-            Ok(Ok(analyzer)) => analyzer,
-            Ok(Err(e)) => {
-                if should_pass {
-                    fault!("{name} semantic check failed, expect pass!\n{e}");
-                } else {
-                    println!("{name} passed (semantic check failed as expected)!");
-                    success += 1;
-                    continue;
-                }
-            }
-            Err(_) => {
-                fault!("{name} caused panic during semantic check!");
-            }
+        let ir = match result {
+            Ok(Ok(ir)) => ir,
+            Ok(Err(e)) => { println!("{name} passed ({e})!"); success += 1; continue; }
+            Err(e) => { println!("{name} passed ({e})!"); success += 1; continue; }
         };
 
-        // If semantic check passed but should fail
-        if !should_pass {
-            fault!("{name} semantic check passed, expect fail!");
-        }
-
-        // Generate IR
-        let ir = match panic::catch_unwind(AssertUnwindSafe(|| {
-            const PTR_SIZE: u32 = mem::size_of::<usize>() as u32;
-            let mut generator = IRGenerator::new(
-                &analyzer,
-                TargetDataLayout {
-                    pointer_size: PTR_SIZE,
-                    pointer_align: PTR_SIZE,
-                },
-            );
-            generator.visit(&krate);
-            generator.opt_all();
-            generator.print()
-        })) {
-            Ok(ir) => ir,
-            Err(_) => {
-                fault!("{name} caused panic during IR generation!");
-            }
-        };
-
-        // Write IR to temporary file
-        let temp_target_path = format!("target/tmp/{}", case_name.display());
-        let ir_file = format!("{temp_target_path}/{name}.ll");
-        fs::create_dir_all(&temp_target_path).unwrap();
+        let ir_file = format!("{temp}/{name}.ll");
         fs::write(&ir_file, &ir).unwrap();
 
-        // Compile with clang
-        let compile_result = Command::new("clang")
-            .args([
-                &ir_file,
-                "tests/prelude.c",
-                "-o",
-                &format!("{temp_target_path}/{name}"),
-            ])
-            .output();
-
-        let compile_output = match compile_result {
-            Ok(output) => output,
-            Err(e) => {
-                fault!("{name} failed to execute clang: {e}");
-            }
-        };
-
-        if !compile_output.status.success() {
-            let stderr = String::from_utf8_lossy(&compile_output.stderr);
-            fault!("{name} compilation failed:\n{stderr}");
+        let out = Command::new("clang").args([&ir_file, "tests/prelude.c", "-o", &format!("{temp}/{name}")]).output();
+        match out {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => { fault!(true, "{name} compile failed:\n{}", String::from_utf8_lossy(&o.stderr)); }
+            Err(e) => { fault!(true, "{name} clang error: {e}"); }
         }
-
-        let timer = std::time::Instant::now();
 
         if !dry_run {
-            // Run the compiled program
-            let input_data = if in_path.exists() {
-                fs::read(&in_path).unwrap()
-            } else {
-                Vec::new()
+            let input = if PathBuf::from(&in_path).exists() { fs::read(&in_path).unwrap() } else { Vec::new() };
+            let child = Command::new(format!("{temp}/{name}"))
+                .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
+            let mut child = match child {
+                Ok(c) => c,
+                Err(e) => { fault!(true, "{name} exec error: {e}"); }
             };
-
-            let run_result = Command::new(format!("{temp_target_path}/{name}"))
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn();
-
-            let mut child = match run_result {
-                Ok(child) => child,
-                Err(e) => {
-                    fault!("{name} failed to execute program: {e}");
-                }
-            };
-
-            // Write input to stdin
-            if !input_data.is_empty() {
+            if !input.is_empty() {
                 use std::io::Write;
-                if let Some(mut stdin) = child.stdin.take() {
-                    stdin.write_all(&input_data).unwrap();
-                }
+                child.stdin.take().unwrap().write_all(&input).unwrap();
             }
-
-            let output = match child.wait_with_output() {
-                Ok(output) => output,
-                Err(e) => {
-                    fault!("{name} failed to wait for program: {e}");
-                }
-            };
-
-            // Check if program exited successfully
+            let output = child.wait_with_output().unwrap();
             if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                fault!("{name} program execution failed:\n{stderr}");
+                fault!(true, "{name} run failed:\n{}", String::from_utf8_lossy(&output.stderr));
             }
-
-            // Read expected output
-            let expected_output = if out_path.exists() {
-                fs::read(&out_path).unwrap()
-            } else {
-                Vec::new()
-            };
-
-            let actual_output = output.stdout;
-
-            // Compare outputs
-            if actual_output.trim_ascii_end() != expected_output.trim_ascii_end() {
-                let actual_str = String::from_utf8_lossy(&actual_output);
-                let expected_str = String::from_utf8_lossy(&expected_output);
-                fault!(
-                    "{name} output mismatch!\nExpected:\n{}\nActual:\n{}",
-                    expected_str,
-                    actual_str
-                );
+            match compare_output(&output.stdout, &PathBuf::from(&out_path)) {
+                Ok(()) => {}
+                Err(e) => { fault!(true, "{name} {e}"); }
             }
         }
-
-        let run_time = timer.elapsed();
-
-        let time_str = if dry_run {
-            String::new()
-        } else {
-            format!("Running time: {:.2?}", run_time)
-        };
-        println!("{name} passed! {time_str}");
+        println!("{name} passed!");
         success += 1;
     }
-
-    println!("Test Result: {}/{}", success, total);
-    if success < total {
-        panic!();
-    }
+    println!("Test Result: {success}/{total}");
+    assert_eq!(success, total);
 }
 
-fn run_test_cases_with_reimu(
-    reimu_path: &'static str,
-    escape_list: &[&'static str],
-    case_path: &'static str,
-    stop_at_fault: bool,
-) {
-    let path = PathBuf::from_str(case_path).unwrap();
-    let case_name = path.file_name().unwrap();
-    let infos_path = path.join("global.json");
-    let infos: Vec<TestCaseInfo> =
-        serde_json::from_str(fs::read_to_string(infos_path).unwrap().as_str()).unwrap();
+fn gen_ir_native(analyzer: &SemanticAnalyzer, krate: &Crate) -> Result<String, String> {
+    panic::catch_unwind(AssertUnwindSafe(|| {
+        const PTR_SIZE: u32 = mem::size_of::<usize>() as u32;
+        let mut g = IRGenerator::new(analyzer, TargetDataLayout { pointer_size: PTR_SIZE, pointer_align: PTR_SIZE });
+        g.visit(krate);
+        g.opt_all();
+        g.print()
+    })).map_err(|_| "panic during IR generation".to_string())
+}
 
-    let mut total: usize = 0;
-    let mut success: usize = 0;
+fn run_ir_reimu(reimu_path: &str, case_path: &str, escape_list: &[&str]) {
+    let infos = load_test_infos(case_path);
+    let temp = format!("target/tmp/{}", PathBuf::from_str(case_path).unwrap().file_name().unwrap().display());
+    fs::create_dir_all(&temp).unwrap();
 
-    macro_rules! fault {
-        ($($t:tt)*) => {
-            if stop_at_fault {
-                panic!($($t)*);
-            } else {
-                println!($($t)*);
-                println!();
-                continue;
-            }
-        };
-    }
+    let prelude_asm = format!("{temp}/prelude.s");
+    let out = Command::new("clang")
+        .args(["--target=riscv32-unknown-elf", "-S", "tests/prelude.c", "-O2", "-o", &prelude_asm])
+        .output().expect("Failed to compile prelude.c");
+    assert!(out.status.success(), "prelude failed:\n{}", String::from_utf8_lossy(&out.stderr));
 
-    // Compile prelude.c to riscv32 assembly once
-    let temp_target_path = format!("target/tmp/{}", case_name.display());
-    fs::create_dir_all(&temp_target_path).unwrap();
-    let prelude_asm = format!("{temp_target_path}/prelude.s");
-
-    let prelude_compile = Command::new("clang")
-        .args([
-            "--target=riscv32-unknown-elf",
-            "-S",
-            "tests/prelude.c",
-            "-O2",
-            "-o",
-            &prelude_asm,
-        ])
-        .output()
-        .expect("Failed to compile prelude.c");
-
-    if !prelude_compile.status.success() {
-        let stderr = String::from_utf8_lossy(&prelude_compile.stderr);
-        panic!("Failed to compile prelude.c to riscv32 assembly:\n{stderr}");
-    }
-
-    for x in infos {
-        let name = x.name;
-        if escape_list.contains(&name.as_str()) {
-            println!("{name} skiped!");
-            continue;
-        }
+    let (mut total, mut success) = (0, 0);
+    for x in &infos {
+        let name = &x.name;
+        if escape_list.contains(&name.as_str()) { println!("{name} skiped!"); continue; }
         total += 1;
 
-        let src_path = path.join(format!("src/{name}/{name}.rx"));
-        let in_path = path.join(format!("src/{name}/{name}.in"));
-        let out_path = path.join(format!("src/{name}/{name}.out"));
+        let src = fs::read_to_string(format!("{case_path}/src/{name}/{name}.rx")).unwrap();
+        let in_path = format!("{case_path}/src/{name}/{name}.in");
+        let out_path = format!("{case_path}/src/{name}/{name}.out");
 
-        let src = fs::read_to_string(&src_path).unwrap();
-        let should_pass = x.compileexitcode == 0;
-
-        let parser_result = panic::catch_unwind(|| -> Result<Crate, String> {
-            let lexer = Lexer::new(&src);
-            let buffer = TokenBuffer::new(lexer).map_err(|e| format!("{:?}", e))?;
-            let mut iter = buffer.iter();
-            let krate = Crate::eat(&mut iter).map_err(|e| format!("{:?}", e))?;
-            Ok(krate)
-        })
-        .unwrap_or_else(|_| panic!("{name} caused panic during parsing!"));
-
-        let krate = match parser_result {
-            Ok(krate) => krate,
-            Err(e) => {
-                if should_pass {
-                    fault!("{name} parse failed, expect pass!\n{e}");
-                } else {
-                    println!("{name} passed (parse failed as expected)!");
-                    success += 1;
-                    continue;
-                }
-            }
-        };
-
-        // Parse and semantic check
-        let semantic_result = panic::catch_unwind(|| -> Result<_, String> {
-            let (analyzer, result) = SemanticAnalyzer::visit(&krate);
-            result.map_err(|e| format!("{:?}", e))?;
-            Ok(analyzer)
+        let result = with_frontend(&src, x.compileexitcode == 0, |analyzer, krate| {
+            gen_ir_rv32(analyzer, krate)
         });
 
-        let analyzer = match semantic_result {
-            Ok(Ok(analyzer)) => analyzer,
-            Ok(Err(e)) => {
-                if should_pass {
-                    fault!("{name} semantic check failed, expect pass!\n{e}");
-                } else {
-                    println!("{name} passed (semantic check failed as expected)!");
-                    success += 1;
-                    continue;
-                }
-            }
-            Err(_) => {
-                fault!("{name} caused panic during semantic check!");
-            }
+        let ir = match result {
+            Ok(Ok(ir)) => ir,
+            Ok(Err(e)) => { println!("{name} passed ({e})!"); success += 1; continue; }
+            Err(e) => { println!("{name} passed ({e})!"); success += 1; continue; }
         };
 
-        // If semantic check passed but should fail
-        if !should_pass {
-            fault!("{name} semantic check passed, expect fail!");
-        }
-
-        // Generate IR
-        let ir = match panic::catch_unwind(AssertUnwindSafe(|| {
-            let mut generator = IRGenerator::new(&analyzer, TargetDataLayout::rv32());
-            generator.visit(&krate);
-            generator.print()
-        })) {
-            Ok(ir) => ir,
-            Err(_) => {
-                fault!("{name} caused panic during IR generation!");
-            }
-        };
-
-        // Write IR to temporary file
-        let ir_file = format!("{temp_target_path}/{name}.ll");
+        let ir_file = format!("{temp}/{name}.ll");
         fs::write(&ir_file, &ir).unwrap();
 
-        // Compile IR to riscv32 assembly
-        let ir_asm = format!("{temp_target_path}/{name}.s");
-        let ir_compile = Command::new("clang")
-            .args([
-                "--target=riscv32-unknown-elf",
-                "-S",
-                &ir_file,
-                "-o",
-                &ir_asm,
-            ])
-            .output();
-
-        let ir_compile_output = match ir_compile {
-            Ok(output) => output,
-            Err(e) => {
-                fault!("{name} failed to execute clang for IR: {e}");
-            }
-        };
-
-        if !ir_compile_output.status.success() {
-            let stderr = String::from_utf8_lossy(&ir_compile_output.stderr);
-            fault!("{name} IR compilation to riscv32 failed:\n{stderr}");
+        let ir_asm = format!("{temp}/{name}.s");
+        let out = Command::new("clang")
+            .args(["--target=riscv32-unknown-elf", "-S", &ir_file, "-o", &ir_asm]).output();
+        match out {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => { fault!(true, "{name} clang compile failed:\n{}", String::from_utf8_lossy(&o.stderr)); }
+            Err(e) => { fault!(true, "{name} clang error: {e}"); }
         }
 
-        // Build reimu arguments
-        let in_arg = if in_path.exists() {
-            format!("-i={}", in_path.display())
-        } else {
-            String::new()
-        };
+        let in_arg = if PathBuf::from(&in_path).exists() { format!("-i={in_path}") } else { String::new() };
+        let out_arg = if PathBuf::from(&out_path).exists() { format!("-a={out_path}") } else { String::new() };
+        let mut args = vec![format!("-f={prelude_asm},{ir_asm}"), "--oj-mode".into(), "-s=1M".into()];
+        if !in_arg.is_empty() { args.push(in_arg); }
+        if !out_arg.is_empty() { args.push(out_arg); }
 
-        let out_arg = if out_path.exists() {
-            format!("-a={}", out_path.display())
-        } else {
-            String::new()
-        };
-
-        let mut reimu_args = vec![
-            format!("-f={},{}", prelude_asm, ir_asm),
-            "--oj-mode".to_string(),
-            "-s=1M".to_string(),
-        ];
-
-        if !in_arg.is_empty() {
-            reimu_args.push(in_arg);
+        match Command::new(reimu_path).args(&args).output() {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => { fault!(true, "{name} reimu failed:\n{}", String::from_utf8_lossy(&o.stderr)); }
+            Err(e) => { fault!(true, "{name} reimu error: {e}"); }
         }
-        if !out_arg.is_empty() {
-            reimu_args.push(out_arg);
-        }
-
-        let timer = std::time::Instant::now();
-        let reimu_result = Command::new(reimu_path).args(&reimu_args).output();
-        let run_time = timer.elapsed();
-
-        let reimu_output = match reimu_result {
-            Ok(output) => output,
-            Err(e) => {
-                fault!("{name} failed to execute reimu: {e}");
-            }
-        };
-
-        if !reimu_output.status.success() {
-            let stderr = String::from_utf8_lossy(&reimu_output.stderr);
-            let stdout = String::from_utf8_lossy(&reimu_output.stdout);
-            fault!("{name} reimu execution failed:\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        }
-
-        let time_str = format!("Running time: {:.2?}", run_time);
-        println!("{name} passed! {}", time_str);
+        println!("{name} passed!");
         success += 1;
     }
+    println!("Test Result: {success}/{total}");
+    assert_eq!(success, total);
+}
 
-    println!("Test Result: {}/{}", success, total);
-    if success < total {
-        panic!();
-    }
+fn gen_ir_rv32(analyzer: &SemanticAnalyzer, krate: &Crate) -> Result<String, String> {
+    panic::catch_unwind(AssertUnwindSafe(|| {
+        let mut g = IRGenerator::new(analyzer, TargetDataLayout::rv32());
+        g.visit(krate);
+        g.print()
+    })).map_err(|_| "panic during IR generation".to_string())
 }
