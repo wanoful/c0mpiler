@@ -3,8 +3,10 @@ mod common;
 use std::{fs, panic::{self, AssertUnwindSafe}, path::PathBuf, process::Command};
 
 use c0mpiler::{
+    ast::{Crate, Eatable},
     ir::layout::TargetDataLayout,
     irgen::IRGenerator,
+    lexer::{Lexer, TokenBuffer},
     mir::lower::{LowerOptions, RV32Lowerer, RV64Lowerer},
     semantics::analyzer::SemanticAnalyzer,
 };
@@ -49,9 +51,15 @@ fn run_rv32_mir(case_path: &str, escape_list: &[&str]) {
         let asm = match with_frontend(&src, x.compileexitcode == 0, |analyzer, krate| {
             gen_rv32_mir(analyzer, krate)
         }) {
-            Ok(Ok(a)) => a,
-            Ok(Err(e)) => { println!("{name} passed ({e})!"); success += 1; continue; }
-            Err(e) => { println!("{name} passed ({e})!"); success += 1; continue; }
+            Ok(Ok(a)) if x.compileexitcode == 0 => a,
+            Err(e) if x.compileexitcode != 0 && !e.starts_with("__UNEXPECTED_PASS__") => {
+                println!("{name} passed ({e})!"); success += 1; continue;
+            }
+            Ok(Err(e)) | Err(e) => {
+                fault!(true, "{name} unexpected result (expect_pass={}): {e}",
+                    x.compileexitcode == 0);
+            }
+            _ => unreachable!(),
         };
 
         fs::write(format!("{temp}/{name}.s"), &asm).unwrap();
@@ -118,9 +126,15 @@ fn run_rv64_qemu(case_path: &str, escape_list: &[&str]) {
         let asm = match with_frontend(&src, x.compileexitcode == 0, |analyzer, krate| {
             gen_rv64_mir(analyzer, krate)
         }) {
-            Ok(Ok(a)) => a,
-            Ok(Err(e)) => { println!("{name} passed ({e})!"); success += 1; continue; }
-            Err(e) => { println!("{name} passed ({e})!"); success += 1; continue; }
+            Ok(Ok(a)) if x.compileexitcode == 0 => a,
+            Err(e) if x.compileexitcode != 0 && !e.starts_with("__UNEXPECTED_PASS__") => {
+                println!("{name} passed ({e})!"); success += 1; continue;
+            }
+            Ok(Err(e)) | Err(e) => {
+                fault!(true, "{name} unexpected result (expect_pass={}): {e}",
+                    x.compileexitcode == 0);
+            }
+            _ => unreachable!(),
         };
 
         fs::write(format!("{temp}/{name}.s"), &asm).unwrap();
@@ -184,4 +198,62 @@ fn gen_rv64_mir(analyzer: &SemanticAnalyzer, krate: &c0mpiler::ast::Crate) -> Re
         });
         lowerer.lower_module(&g.module()).unwrap().to_string()
     })).map_err(|_| "panic during asm generation".to_string())
+}
+
+#[test]
+fn e2e_rv64() {
+    let qemu_path = std::env::var("QEMU_RV64_PATH")
+        .unwrap_or("/home/color/workspace/os/qemu-10.2.1/build/qemu-riscv64".to_string());
+
+    let src = r#"
+fn main() {
+    println("Hello from c0mpiler e2e test!");
+    exit(0);
+}
+"#;
+
+    let temp = "target/tmp/e2e_rv64";
+    fs::create_dir_all(temp).unwrap();
+
+    let prelude_o = format!("{temp}/prelude.o");
+    let out = Command::new("riscv64-linux-gnu-gcc")
+        .args(["-O2", "-c", "tests/prelude.c", "-o", &prelude_o])
+        .output().expect("Failed to compile prelude.c");
+    assert!(out.status.success(), "prelude failed:\n{}", String::from_utf8_lossy(&out.stderr));
+
+    let lexer = Lexer::new(src);
+    let buffer = TokenBuffer::new(lexer).expect("lexer error");
+    let mut iter = buffer.iter();
+    let krate = Crate::eat(&mut iter).expect("parse error");
+
+    let (analyzer, sem_result) = SemanticAnalyzer::visit(&krate);
+    sem_result.expect("semantic error");
+
+    let mut g = IRGenerator::new(&analyzer, TargetDataLayout::rv64());
+    g.visit(&krate);
+    g.opt_all();
+
+    let mut lowerer = RV64Lowerer::with_options(LowerOptions {
+        lower_function_bodies: true, need_branch_relaxation: true,
+        optimize_fallthroughs: true, optimize_peephole: true,
+    });
+    let asm = lowerer.lower_module(&g.module()).unwrap().to_string();
+    fs::write(format!("{temp}/test.s"), &asm).unwrap();
+
+    let obj = format!("{temp}/test.o");
+    let asm_out = Command::new("riscv64-linux-gnu-gcc")
+        .args(["-c", &format!("{temp}/test.s"), "-o", &obj]).output().unwrap();
+    assert!(asm_out.status.success(), "asm failed:\n{}", String::from_utf8_lossy(&asm_out.stderr));
+
+    let elf = format!("{temp}/test.elf");
+    let ld_out = Command::new("riscv64-linux-gnu-gcc")
+        .args(["-static", &prelude_o, &obj, "-o", &elf]).output().unwrap();
+    assert!(ld_out.status.success(), "link failed:\n{}", String::from_utf8_lossy(&ld_out.stderr));
+
+    let output = Command::new(&qemu_path).arg(&elf).output().unwrap();
+    assert!(output.status.success(), "qemu failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout, "Hello from c0mpiler e2e test!\n");
 }

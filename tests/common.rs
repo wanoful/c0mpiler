@@ -35,7 +35,7 @@ pub fn with_frontend<T>(
         let (analyzer, sem_result) = SemanticAnalyzer::visit(&krate);
         sem_result.map_err(|e| format!("{:?}", e))?;
         if !should_pass {
-            return Err("semantic check passed, expect fail".to_string());
+            return Err("__UNEXPECTED_PASS__ semantic check passed, expect fail".to_string());
         }
         Ok(f(&analyzer, &krate))
     }));

@@ -73,9 +73,15 @@ fn run_ir_native(case_path: &str, escape_list: &[&str], dry_run: bool) {
         });
 
         let ir = match result {
-            Ok(Ok(ir)) => ir,
-            Ok(Err(e)) => { println!("{name} passed ({e})!"); success += 1; continue; }
-            Err(e) => { println!("{name} passed ({e})!"); success += 1; continue; }
+            Ok(Ok(ir)) if x.compileexitcode == 0 => ir,
+            Err(e) if x.compileexitcode != 0 && !e.starts_with("__UNEXPECTED_PASS__") => {
+                println!("{name} passed ({e})!"); success += 1; continue;
+            }
+            Ok(Err(e)) | Err(e) => {
+                fault!(true, "{name} unexpected result (expect_pass={}): {e}",
+                    x.compileexitcode == 0);
+            }
+            _ => unreachable!(),
         };
 
         let ir_file = format!("{temp}/{name}.ll");
@@ -152,9 +158,15 @@ fn run_ir_reimu(reimu_path: &str, case_path: &str, escape_list: &[&str]) {
         });
 
         let ir = match result {
-            Ok(Ok(ir)) => ir,
-            Ok(Err(e)) => { println!("{name} passed ({e})!"); success += 1; continue; }
-            Err(e) => { println!("{name} passed ({e})!"); success += 1; continue; }
+            Ok(Ok(ir)) if x.compileexitcode == 0 => ir,
+            Err(e) if x.compileexitcode != 0 && !e.starts_with("__UNEXPECTED_PASS__") => {
+                println!("{name} passed ({e})!"); success += 1; continue;
+            }
+            Ok(Err(e)) | Err(e) => {
+                fault!(true, "{name} unexpected result (expect_pass={}): {e}",
+                    x.compileexitcode == 0);
+            }
+            _ => unreachable!(),
         };
 
         let ir_file = format!("{temp}/{name}.ll");
