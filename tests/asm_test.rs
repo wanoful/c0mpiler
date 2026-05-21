@@ -290,38 +290,9 @@ fn run_test_cases_with_qemu(escape_list: &[&str], case_path: &str, stop_at_fault
     let temp_target_path = format!("target/tmp/{}/rv64_asm", case_name.display());
     fs::create_dir_all(&temp_target_path).unwrap();
 
-    let rt_path = format!("{temp_target_path}/rv64rt.o");
     let prelude_path = format!("{temp_target_path}/prelude.o");
-
-    let _compile_rt = Command::new("clang")
+    let compile_prelude = Command::new("riscv64-linux-gnu-gcc")
         .args([
-            "--target=riscv64-unknown-elf",
-            "-nostdlib",
-            "-ffreestanding",
-            "-O2",
-            "-c",
-            "tests/rv64rt.c",
-            "-o",
-            &rt_path,
-        ])
-        .output()
-        .expect("Failed to compile rv64rt.c");
-    let _compile_rt_s = Command::new("clang")
-        .args([
-            "--target=riscv64-unknown-elf",
-            "-nostdlib",
-            "-c",
-            "tests/rv64rt.s",
-            "-o",
-            &format!("{temp_target_path}/rv64rt_s.o"),
-        ])
-        .output()
-        .expect("Failed to compile rv64rt.s");
-    let _compile_prelude = Command::new("clang")
-        .args([
-            "--target=riscv64-unknown-elf",
-            "-nostdlib",
-            "-ffreestanding",
             "-O2",
             "-c",
             "tests/prelude_rv64.c",
@@ -330,6 +301,13 @@ fn run_test_cases_with_qemu(escape_list: &[&str], case_path: &str, stop_at_fault
         ])
         .output()
         .expect("Failed to compile prelude_rv64.c");
+
+    if !compile_prelude.status.success() {
+        panic!(
+            "Failed to compile prelude_rv64.c:\n{}",
+            String::from_utf8_lossy(&compile_prelude.stderr)
+        );
+    }
 
     for x in infos {
         let name = x.name;
@@ -423,15 +401,8 @@ fn run_test_cases_with_qemu(escape_list: &[&str], case_path: &str, stop_at_fault
         fs::write(&asm_file, &asm).unwrap();
 
         let obj_file = format!("{temp_target_path}/{name}.o");
-        let compile_asm = Command::new("clang")
-            .args([
-                "--target=riscv64-unknown-elf",
-                "-nostdlib",
-                "-c",
-                &asm_file,
-                "-o",
-                &obj_file,
-            ])
+        let compile_asm = Command::new("riscv64-linux-gnu-gcc")
+            .args(["-c", &asm_file, "-o", &obj_file])
             .output();
 
         match compile_asm {
@@ -446,13 +417,9 @@ fn run_test_cases_with_qemu(escape_list: &[&str], case_path: &str, stop_at_fault
         }
 
         let elf_file = format!("{temp_target_path}/{name}.elf");
-        let link_result = Command::new("clang")
+        let link_result = Command::new("riscv64-linux-gnu-gcc")
             .args([
-                "--target=riscv64-unknown-elf",
-                "-nostdlib",
-                "-fuse-ld=lld",
-                &format!("{temp_target_path}/rv64rt_s.o"),
-                &rt_path,
+                "-static",
                 &prelude_path,
                 &obj_file,
                 "-o",

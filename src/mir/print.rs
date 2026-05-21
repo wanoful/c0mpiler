@@ -76,7 +76,7 @@ impl<T: TargetArch> Display for ModulePrinter<'_, T> {
 fn section_name(segment: MachineSegment) -> &'static str {
     match segment {
         MachineSegment::Text => ".text",
-        MachineSegment::ReadOnlyData => ".rodata",
+        MachineSegment::ReadOnlyData => ".section .rodata",
         MachineSegment::Data => ".data",
         MachineSegment::Bss => ".bss",
     }
