@@ -28,11 +28,11 @@ impl Display for FullName {
                 .map(|x| x.0.clone())
                 .collect::<Vec<_>>()
                 .join(".");
-            if s.starts_with(|x: char| x.is_ascii_digit()) {
-                "$".to_owned() + &s
-            } else {
-                s
-            }
+        if s.starts_with(|x: char| x.is_ascii_digit()) {
+            "_".to_owned() + &s
+        } else {
+            s
+        }
         })
     }
 }

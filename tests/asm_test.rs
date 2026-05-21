@@ -10,7 +10,7 @@ use c0mpiler::{
     ir::layout::TargetDataLayout,
     irgen::IRGenerator,
     lexer::{Lexer, TokenBuffer},
-    mir::lower::{LowerOptions, RV32Lowerer},
+    mir::lower::{LowerOptions, RV32Lowerer, RV64Lowerer},
     semantics::analyzer::SemanticAnalyzer,
     utils::test::TestCaseInfo,
 };
@@ -31,6 +31,18 @@ fn my_ir() {
 fn ir_1_asm() {
     let escape_list: [&str; 0] = [];
     run_test_cases_with_reimu(&escape_list, "RCompiler-Testcases/IR-1", true);
+}
+
+#[test]
+fn my_rv64_asm() {
+    let escape_list: [&str; 0] = [];
+    run_test_cases_with_qemu(&escape_list, "testcases/asm", true);
+}
+
+#[test]
+fn my_rv64_ir() {
+    let escape_list: [&str; 0] = [];
+    run_test_cases_with_qemu(&escape_list, "testcases/IR", true);
 }
 
 fn require_reimu_path() -> String {
@@ -238,6 +250,288 @@ fn run_test_cases_with_reimu(escape_list: &[&str], case_path: &str, stop_at_faul
         println!(
             "{name} passed! Compile time: {compile_time:.2?} (Parse: {parse_time:.2?}, Semantic: {semantic_time:.2?}, IR: {ir_time:.2?}, ASM: {asm_time:.2?}), Running time: {running_time:.2?}"
         );
+        success += 1;
+    }
+
+    println!("Test Result: {}/{}", success, total);
+    if success < total {
+        panic!();
+    }
+}
+
+fn require_qemu_path() -> String {
+    std::env::var("QEMU_RV64_PATH")
+        .unwrap_or("/home/color/workspace/os/qemu-10.2.1/build/qemu-riscv64".to_string())
+}
+
+fn run_test_cases_with_qemu(escape_list: &[&str], case_path: &str, stop_at_fault: bool) {
+    let qemu_path = require_qemu_path();
+    let path = PathBuf::from(case_path);
+    let case_name = path.file_name().expect("invalid test case path");
+    let infos_path = path.join("global.json");
+    let infos: Vec<TestCaseInfo> =
+        serde_json::from_str(fs::read_to_string(infos_path).unwrap().as_str()).unwrap();
+
+    let mut total: usize = 0;
+    let mut success: usize = 0;
+
+    macro_rules! fault {
+        ($($t:tt)*) => {
+            if stop_at_fault {
+                panic!($($t)*);
+            } else {
+                println!($($t)*);
+                println!();
+                continue;
+            }
+        };
+    }
+
+    let temp_target_path = format!("target/tmp/{}/rv64_asm", case_name.display());
+    fs::create_dir_all(&temp_target_path).unwrap();
+
+    let rt_path = format!("{temp_target_path}/rv64rt.o");
+    let prelude_path = format!("{temp_target_path}/prelude.o");
+
+    let _compile_rt = Command::new("clang")
+        .args([
+            "--target=riscv64-unknown-elf",
+            "-nostdlib",
+            "-ffreestanding",
+            "-O2",
+            "-c",
+            "tests/rv64rt.c",
+            "-o",
+            &rt_path,
+        ])
+        .output()
+        .expect("Failed to compile rv64rt.c");
+    let _compile_rt_s = Command::new("clang")
+        .args([
+            "--target=riscv64-unknown-elf",
+            "-nostdlib",
+            "-c",
+            "tests/rv64rt.s",
+            "-o",
+            &format!("{temp_target_path}/rv64rt_s.o"),
+        ])
+        .output()
+        .expect("Failed to compile rv64rt.s");
+    let _compile_prelude = Command::new("clang")
+        .args([
+            "--target=riscv64-unknown-elf",
+            "-nostdlib",
+            "-ffreestanding",
+            "-O2",
+            "-c",
+            "tests/prelude_rv64.c",
+            "-o",
+            &prelude_path,
+        ])
+        .output()
+        .expect("Failed to compile prelude_rv64.c");
+
+    for x in infos {
+        let name = x.name;
+        if escape_list.contains(&name.as_str()) {
+            println!("{name} skiped!");
+            continue;
+        }
+        total += 1;
+
+        let src_path = path.join(format!("src/{name}/{name}.rx"));
+        let in_path = path.join(format!("src/{name}/{name}.in"));
+        let out_path = path.join(format!("src/{name}/{name}.out"));
+
+        let src = fs::read_to_string(&src_path).unwrap();
+        let should_pass = x.compileexitcode == 0;
+
+        let timer = std::time::Instant::now();
+
+        let parser_result = panic::catch_unwind(|| -> Result<Crate, String> {
+            let lexer = Lexer::new(&src);
+            let buffer = TokenBuffer::new(lexer).map_err(|e| format!("{:?}", e))?;
+            let mut iter = buffer.iter();
+            let krate = Crate::eat(&mut iter).map_err(|e| format!("{:?}", e))?;
+            Ok(krate)
+        })
+        .unwrap_or_else(|_| panic!("{name} caused panic during parsing!"));
+
+        let krate = match parser_result {
+            Ok(krate) => krate,
+            Err(e) => {
+                if should_pass {
+                    fault!("{name} parse failed, expect pass!\n{e}");
+                } else {
+                    println!("{name} passed (parse failed as expected)!");
+                    success += 1;
+                    continue;
+                }
+            }
+        };
+
+        let semantic_result = panic::catch_unwind(|| -> Result<_, String> {
+            let (analyzer, result) = SemanticAnalyzer::visit(&krate);
+            result.map_err(|e| format!("{:?}", e))?;
+            Ok(analyzer)
+        });
+
+        let analyzer = match semantic_result {
+            Ok(Ok(analyzer)) => analyzer,
+            Ok(Err(e)) => {
+                if should_pass {
+                    fault!("{name} semantic check failed, expect pass!\n{e}");
+                } else {
+                    println!("{name} passed (semantic check failed as expected)!");
+                    success += 1;
+                    continue;
+                }
+            }
+            Err(_) => {
+                fault!("{name} caused panic during semantic check!");
+            }
+        };
+
+        if !should_pass {
+            fault!("{name} semantic check passed, expect fail!");
+        }
+
+        let asm = match panic::catch_unwind(AssertUnwindSafe(|| {
+            let mut generator = IRGenerator::new(&analyzer, TargetDataLayout::rv64());
+            generator.visit(&krate);
+            generator.opt_all();
+
+            let module = generator.module();
+
+            let mut lowerer = RV64Lowerer::with_options(LowerOptions {
+                lower_function_bodies: true,
+                need_branch_relaxation: true,
+                optimize_fallthroughs: true,
+                optimize_peephole: true,
+            });
+            let machine_module = lowerer.lower_module(&module).expect("MIR lowering failed");
+
+            machine_module.to_string()
+        })) {
+            Ok(asm) => asm,
+            Err(_) => {
+                fault!("{name} caused panic during asm generation!");
+            }
+        };
+
+        let asm_file = format!("{temp_target_path}/{name}.s");
+        fs::write(&asm_file, &asm).unwrap();
+
+        let obj_file = format!("{temp_target_path}/{name}.o");
+        let compile_asm = Command::new("clang")
+            .args([
+                "--target=riscv64-unknown-elf",
+                "-nostdlib",
+                "-c",
+                &asm_file,
+                "-o",
+                &obj_file,
+            ])
+            .output();
+
+        match compile_asm {
+            Ok(output) if output.status.success() => {}
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                fault!("{name} assembly failed:\n{stderr}");
+            }
+            Err(e) => {
+                fault!("{name} failed to run assembler: {e}");
+            }
+        }
+
+        let elf_file = format!("{temp_target_path}/{name}.elf");
+        let link_result = Command::new("clang")
+            .args([
+                "--target=riscv64-unknown-elf",
+                "-nostdlib",
+                "-fuse-ld=lld",
+                &format!("{temp_target_path}/rv64rt_s.o"),
+                &rt_path,
+                &prelude_path,
+                &obj_file,
+                "-o",
+                &elf_file,
+            ])
+            .output();
+
+        match link_result {
+            Ok(output) if output.status.success() => {}
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                fault!("{name} link failed:\n{stderr}");
+            }
+            Err(e) => {
+                fault!("{name} failed to run linker: {e}");
+            }
+        }
+
+        let input_data = if in_path.exists() {
+            fs::read(&in_path).unwrap()
+        } else {
+            Vec::new()
+        };
+
+        let qemu_result = Command::new(&qemu_path)
+            .arg(&elf_file)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn();
+
+        let mut child = match qemu_result {
+            Ok(child) => child,
+            Err(e) => {
+                fault!("{name} failed to execute qemu: {e}");
+            }
+        };
+
+        if !input_data.is_empty() {
+            use std::io::Write;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(&input_data).unwrap();
+            }
+        }
+
+        let output = match child.wait_with_output() {
+            Ok(output) => output,
+            Err(e) => {
+                fault!("{name} failed to wait for qemu: {e}");
+            }
+        };
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            fault!("{name} qemu execution failed:\nstdout:\n{stdout}\nstderr:\n{stderr}");
+        }
+
+        let expected_output = if out_path.exists() {
+            fs::read(&out_path).unwrap()
+        } else {
+            Vec::new()
+        };
+
+        let actual_output = output.stdout;
+
+        if actual_output.trim_ascii_end() != expected_output.trim_ascii_end() {
+            let actual_str = String::from_utf8_lossy(&actual_output);
+            let expected_str = String::from_utf8_lossy(&expected_output);
+            fault!(
+                "{name} output mismatch!\nExpected:\n{}\nActual:\n{}",
+                expected_str,
+                actual_str
+            );
+        }
+
+        let compile_time = timer.elapsed();
+
+        println!("{name} passed! Compile time: {compile_time:.2?}");
         success += 1;
     }
 

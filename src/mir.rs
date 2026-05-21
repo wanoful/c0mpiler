@@ -3,6 +3,7 @@ pub(crate) mod macros;
 pub(crate) mod opt;
 pub(crate) mod print;
 pub mod rv32im;
+pub mod rv64i;
 
 pub(crate) use macros::*;
 
@@ -89,6 +90,7 @@ pub trait TargetInst {
 pub trait LoweringTarget: TargetArch + Default {
     const WORD_SIZE: usize;
     const FRAME_ALIGN: usize;
+    const SHIFT_AMT_BITS: usize;
 
     fn zero_reg() -> Self::PhysicalReg;
     fn return_reg() -> Self::PhysicalReg;

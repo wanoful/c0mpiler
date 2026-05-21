@@ -282,12 +282,13 @@ fn emit_masked_value<T: LoweringTarget>(
     out: &mut Vec<T::MachineInst>,
     machine_function: &mut MachineFunction<T>,
 ) -> Register<T::PhysicalReg> {
-    if bits >= 32 {
+    let reg_bits = (T::WORD_SIZE * 8) as u8;
+    if bits >= reg_bits {
         return src;
     }
 
     let rd = Register::Virtual(machine_function.new_vreg());
-    let mask = (1u32 << bits) - 1;
+    let mask = (1u64 << bits) - 1;
     if mask <= 0x7ff {
         out.push(T::emit_andi(rd, src, mask as i32));
     } else {
@@ -456,6 +457,7 @@ impl<T: LoweringTarget> Default for Lowerer<T> {
 }
 
 pub type RV32Lowerer = Lowerer<crate::mir::rv32im::RV32Arch>;
+pub type RV64Lowerer = Lowerer<crate::mir::rv64i::RV64Arch>;
 
 impl<T: LoweringTarget> Lowerer<T> {
     pub fn new() -> Self {
@@ -829,6 +831,7 @@ impl<T: LoweringTarget> Lowerer<T> {
                     let rd_vreg = self.ensure_inst_vreg(instruction, machine_function, state);
                     let rd = Register::Virtual(rd_vreg);
                     let imm = number.as_i64() as i32;
+                    let shift_amt_limit = 1 << T::SHIFT_AMT_BITS;
                     let lowered = match op {
                         BinaryOpcode::Add if (-2048..=2047).contains(&imm) => {
                             Some(T::emit_addi(rd, rs1, imm))
@@ -837,13 +840,13 @@ impl<T: LoweringTarget> Lowerer<T> {
                             .checked_neg()
                             .filter(|neg_imm| (-2048..=2047).contains(neg_imm))
                             .map(|neg_imm| T::emit_addi(rd, rs1, neg_imm)),
-                        BinaryOpcode::Shl if (0..32).contains(&imm) => {
+                        BinaryOpcode::Shl if (0..shift_amt_limit).contains(&(imm as usize)) => {
                             Some(T::emit_slli(rd, rs1, imm))
                         }
-                        BinaryOpcode::LShr if (0..32).contains(&imm) => {
+                        BinaryOpcode::LShr if (0..shift_amt_limit).contains(&(imm as usize)) => {
                             Some(T::emit_srli(rd, rs1, imm))
                         }
-                        BinaryOpcode::AShr if (0..32).contains(&imm) => {
+                        BinaryOpcode::AShr if (0..shift_amt_limit).contains(&(imm as usize)) => {
                             Some(T::emit_srai(rd, rs1, imm))
                         }
                         BinaryOpcode::And if (-2048..=2047).contains(&imm) => {
@@ -1212,26 +1215,24 @@ impl<T: LoweringTarget> Lowerer<T> {
                     )
                 };
 
-                match type_layout.layout.size as usize {
-                    1 | 2 | 4 => {
-                        if let Some(symbol_id) = symbol_id {
-                            out.push(T::emit_load_global(
-                                rd,
-                                symbol_id,
-                                type_layout.layout.size as usize,
-                                false,
-                            ));
-                        } else {
-                            out.push(T::emit_load_mem(
-                                rd,
-                                rs1,
-                                0,
-                                type_layout.layout.size as usize,
-                                type_layout.layout.size < 4,
-                            ));
-                        }
-                    }
-                    _ => panic!("unsupported load size"),
+                if type_layout.layout.size as usize > T::WORD_SIZE {
+                    panic!("unsupported load size: {}", type_layout.layout.size);
+                }
+                if let Some(symbol_id) = symbol_id {
+                    out.push(T::emit_load_global(
+                        rd,
+                        symbol_id,
+                        type_layout.layout.size as usize,
+                        false,
+                    ));
+                } else {
+                    out.push(T::emit_load_mem(
+                        rd,
+                        rs1,
+                        0,
+                        type_layout.layout.size as usize,
+                        type_layout.layout.size < (T::WORD_SIZE as u32),
+                    ));
                 }
             }
             InstKind::Ret { value } => {
@@ -1265,17 +1266,15 @@ impl<T: LoweringTarget> Lowerer<T> {
                 let type_layout = type_layout(module, stored_ty)?;
                 if let ValueId::Global(global) = *ptr {
                     let symbol = machine_module.symbol_map[&module.global(global).name];
-                    match type_layout.layout.size as usize {
-                        1 | 2 | 4 => {
-                            out.push(T::emit_store_global(
-                                rs2,
-                                symbol,
-                                type_layout.layout.size as usize,
-                                Register::Virtual(machine_function.new_vreg()),
-                            ));
-                        }
-                        _ => panic!("unsupported store size"),
+                    if type_layout.layout.size as usize > T::WORD_SIZE {
+                        panic!("unsupported store size");
                     }
+                    out.push(T::emit_store_global(
+                        rs2,
+                        symbol,
+                        type_layout.layout.size as usize,
+                        Register::Virtual(machine_function.new_vreg()),
+                    ));
                 } else {
                     let rs1 = lower_operand(
                         module,
@@ -1285,17 +1284,15 @@ impl<T: LoweringTarget> Lowerer<T> {
                         machine_function,
                         machine_module,
                     )?;
-                    match type_layout.layout.size as usize {
-                        1 | 2 | 4 => {
-                            out.push(T::emit_store_mem(
-                                rs1,
-                                rs2,
-                                0,
-                                type_layout.layout.size as usize,
-                            ));
-                        }
-                        _ => panic!("unsupported store size"),
+                    if type_layout.layout.size as usize > T::WORD_SIZE {
+                        panic!("unsupported store size");
                     }
+                    out.push(T::emit_store_mem(
+                        rs1,
+                        rs2,
+                        0,
+                        type_layout.layout.size as usize,
+                    ));
                 }
             }
             InstKind::ICmp { op, lhs, rhs } => {
@@ -1443,10 +1440,11 @@ impl<T: LoweringTarget> Lowerer<T> {
                 )?;
                 let rd_vreg = self.ensure_inst_vreg(instruction, machine_function, state);
                 let src_bits = module.value_ty(*value).as_int().unwrap().0;
-                if src_bits >= 32 {
+                let reg_bits = (T::WORD_SIZE * 8) as u8;
+                if src_bits >= reg_bits {
                     out.push(T::MachineInst::mv(Register::Virtual(rd_vreg), src));
                 } else {
-                    let shift = 32 - src_bits;
+                    let shift = (reg_bits - src_bits) as i32;
                     out.push(T::emit_slli(Register::Virtual(rd_vreg), src, shift as i32));
                     out.push(T::emit_srai(
                         Register::Virtual(rd_vreg),

@@ -6,21 +6,20 @@ use crate::{
     impossible,
     mir::{
         BlockId, FrameLayout, LoweringTarget, Register, StackSlotId, SymbolId, TargetArch,
-        TargetInst, generate_reg_rewrite, rv32im::print::RV32InstPrinter,
+        TargetInst, generate_reg_rewrite, rv64i::print::RV64InstPrinter,
     },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RV32Arch;
+pub struct RV64Arch;
 
-impl TargetArch for RV32Arch {
-    type PhysicalReg = RV32Reg;
-    type MachineInst = RV32Inst;
-    type InstPrinter<'a> = RV32InstPrinter<'a>;
+impl TargetArch for RV64Arch {
+    type PhysicalReg = RV64Reg;
+    type MachineInst = RV64Inst;
+    type InstPrinter<'a> = RV64InstPrinter<'a>;
 
     fn get_allocatable_regs() -> Vec<Self::PhysicalReg> {
-        use RV32Reg::*;
-        // 删除 T6 以供溢出使用
+        use RV64Reg::*;
         vec![
             T0, T1, T2, T3, T4, T5, S0, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, A0, A1, A2,
             A3, A4, A5, A6, A7,
@@ -31,24 +30,24 @@ impl TargetArch for RV32Arch {
     where
         Self: Sized,
     {
-        &[RV32Reg::T6]
+        &[RV64Reg::T6]
     }
 
     fn is_callee_saved(reg: Self::PhysicalReg) -> bool {
         matches!(
             reg,
-            RV32Reg::S0
-                | RV32Reg::S1
-                | RV32Reg::S2
-                | RV32Reg::S3
-                | RV32Reg::S4
-                | RV32Reg::S5
-                | RV32Reg::S6
-                | RV32Reg::S7
-                | RV32Reg::S8
-                | RV32Reg::S9
-                | RV32Reg::S10
-                | RV32Reg::S11
+            RV64Reg::S0
+                | RV64Reg::S1
+                | RV64Reg::S2
+                | RV64Reg::S3
+                | RV64Reg::S4
+                | RV64Reg::S5
+                | RV64Reg::S6
+                | RV64Reg::S7
+                | RV64Reg::S8
+                | RV64Reg::S9
+                | RV64Reg::S10
+                | RV64Reg::S11
         )
     }
 
@@ -57,7 +56,7 @@ impl TargetArch for RV32Arch {
     }
 }
 
-impl Default for RV32Arch {
+impl Default for RV64Arch {
     fn default() -> Self {
         Self
     }
@@ -66,36 +65,36 @@ impl Default for RV32Arch {
 #[rustfmt::skip]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(u8)]
-pub enum RV32Reg {
-    Zero, Ra, Sp, Gp, Tp, 
-    T0, T1, T2, S0, S1, 
-    A0, A1, A2, A3, A4, A5, A6, A7, 
-    S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, 
+pub enum RV64Reg {
+    Zero, Ra, Sp, Gp, Tp,
+    T0, T1, T2, S0, S1,
+    A0, A1, A2, A3, A4, A5, A6, A7,
+    S2, S3, S4, S5, S6, S7, S8, S9, S10, S11,
     T3, T4, T5, T6,
 }
 
-impl RV32Reg {
+impl RV64Reg {
     pub fn reg_a(index: usize) -> Self {
         match index {
-            0 => RV32Reg::A0,
-            1 => RV32Reg::A1,
-            2 => RV32Reg::A2,
-            3 => RV32Reg::A3,
-            4 => RV32Reg::A4,
-            5 => RV32Reg::A5,
-            6 => RV32Reg::A6,
-            7 => RV32Reg::A7,
+            0 => RV64Reg::A0,
+            1 => RV64Reg::A1,
+            2 => RV64Reg::A2,
+            3 => RV64Reg::A3,
+            4 => RV64Reg::A4,
+            5 => RV64Reg::A5,
+            6 => RV64Reg::A6,
+            7 => RV64Reg::A7,
             _ => panic!("Invalid register index"),
         }
     }
 }
 
-type Reg = Register<RV32Reg>;
+type Reg = Register<RV64Reg>;
 
 generate_reg_rewrite! {
 #[rustfmt::skip]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RV32Inst {
+pub enum RV64Inst {
     Add { rd: Reg, rs1: Reg, rs2: Reg },
     Sub { rd: Reg, rs1: Reg, rs2: Reg },
     Xor { rd: Reg, rs1: Reg, rs2: Reg },
@@ -120,12 +119,15 @@ pub enum RV32Inst {
     Lb { rd: Reg, rs1: Reg, imm: i32 },
     Lh { rd: Reg, rs1: Reg, imm: i32 },
     Lw { rd: Reg, rs1: Reg, imm: i32 },
+    Ld { rd: Reg, rs1: Reg, imm: i32 },
     Lbu { rd: Reg, rs1: Reg, imm: i32 },
     Lhu { rd: Reg, rs1: Reg, imm: i32 },
+    Lwu { rd: Reg, rs1: Reg, imm: i32 },
 
     Sb { rs1: Reg, rs2: Reg, imm: i32 },
     Sh { rs1: Reg, rs2: Reg, imm: i32 },
     Sw { rs1: Reg, rs2: Reg, imm: i32 },
+    Sd { rs1: Reg, rs2: Reg, imm: i32 },
 
     Beq { rs1: Reg, rs2: Reg, label: BlockId },
     Bne { rs1: Reg, rs2: Reg, label: BlockId },
@@ -149,7 +151,6 @@ pub enum RV32Inst {
     Rem { rd: Reg, rs1: Reg, rs2: Reg },
     Remu { rd: Reg, rs1: Reg, rs2: Reg },
 
-    // Pseudo-instructions https://github.com/DarkSharpness/REIMU/blob/main/docs/support.md
     Mv { rd: Reg, rs: Reg },
     Li { rd: Reg, imm: i32 },
 
@@ -159,9 +160,11 @@ pub enum RV32Inst {
     Lbs { rd: Reg, symbol: SymbolId },
     Lhs { rd: Reg, symbol: SymbolId },
     Lws { rd: Reg, symbol: SymbolId },
+    Lds { rd: Reg, symbol: SymbolId },
     Sbs { rs: Reg, symbol: SymbolId, rt: Reg },
     Shs { rs: Reg, symbol: SymbolId, rt: Reg },
     Sws { rs: Reg, symbol: SymbolId, rt: Reg },
+    Sds { rs: Reg, symbol: SymbolId, rt: Reg },
 
     Call { func: SymbolId, num_args: usize },
     Tail { func: SymbolId, num_args: usize },
@@ -174,11 +177,11 @@ pub enum RV32Inst {
 }
 }
 
-impl TargetInst for RV32Inst {
-    type PhysicalReg = RV32Reg;
+impl TargetInst for RV64Inst {
+    type PhysicalReg = RV64Reg;
 
     fn def_regs(&self) -> Vec<Register<Self::PhysicalReg>> {
-        use RV32Inst::*;
+        use RV64Inst::*;
         match self {
             Add { rd, .. }
             | Sub { rd, .. }
@@ -202,8 +205,10 @@ impl TargetInst for RV32Inst {
             | Lb { rd, .. }
             | Lh { rd, .. }
             | Lw { rd, .. }
+            | Ld { rd, .. }
             | Lbu { rd, .. }
             | Lhu { rd, .. }
+            | Lwu { rd, .. }
             | Jal { rd, .. }
             | Jalr { rd, .. }
             | Lui { rd, .. }
@@ -221,33 +226,35 @@ impl TargetInst for RV32Inst {
             | La { rd, .. }
             | Lbs { rd, .. }
             | Lhs { rd, .. }
-            | Lws { rd, .. } => vec![*rd],
+            | Lws { rd, .. }
+            | Lds { rd, .. } => vec![*rd],
             LoadStack { rd, .. } | LoadIncomingArg { rd, .. } | GetStackAddr { rd, .. } => {
                 vec![*rd]
             }
             Sbs { rt, .. }
             | Shs { rt, .. }
             | Sws { rt, .. }
+            | Sds { rt, .. }
             | SaveStack { rt, .. }
             | StoreOutgoingArg { rt, .. } => vec![*rt],
             Call { .. } => {
                 vec![
-                    Register::Physical(RV32Reg::Ra),
-                    Register::Physical(RV32Reg::A0),
-                    Register::Physical(RV32Reg::A1),
-                    Register::Physical(RV32Reg::A2),
-                    Register::Physical(RV32Reg::A3),
-                    Register::Physical(RV32Reg::A4),
-                    Register::Physical(RV32Reg::A5),
-                    Register::Physical(RV32Reg::A6),
-                    Register::Physical(RV32Reg::A7),
-                    Register::Physical(RV32Reg::T0),
-                    Register::Physical(RV32Reg::T1),
-                    Register::Physical(RV32Reg::T2),
-                    Register::Physical(RV32Reg::T3),
-                    Register::Physical(RV32Reg::T4),
-                    Register::Physical(RV32Reg::T5),
-                    Register::Physical(RV32Reg::T6),
+                    Register::Physical(RV64Reg::Ra),
+                    Register::Physical(RV64Reg::A0),
+                    Register::Physical(RV64Reg::A1),
+                    Register::Physical(RV64Reg::A2),
+                    Register::Physical(RV64Reg::A3),
+                    Register::Physical(RV64Reg::A4),
+                    Register::Physical(RV64Reg::A5),
+                    Register::Physical(RV64Reg::A6),
+                    Register::Physical(RV64Reg::A7),
+                    Register::Physical(RV64Reg::T0),
+                    Register::Physical(RV64Reg::T1),
+                    Register::Physical(RV64Reg::T2),
+                    Register::Physical(RV64Reg::T3),
+                    Register::Physical(RV64Reg::T4),
+                    Register::Physical(RV64Reg::T5),
+                    Register::Physical(RV64Reg::T6),
                 ]
             }
             Tail { .. } => vec![],
@@ -256,7 +263,7 @@ impl TargetInst for RV32Inst {
     }
 
     fn use_regs(&self) -> Vec<Register<Self::PhysicalReg>> {
-        use RV32Inst::*;
+        use RV64Inst::*;
         match self {
             Add { rs1, rs2, .. }
             | Sub { rs1, rs2, .. }
@@ -280,9 +287,13 @@ impl TargetInst for RV32Inst {
             Lb { rs1, .. }
             | Lh { rs1, .. }
             | Lw { rs1, .. }
+            | Ld { rs1, .. }
             | Lbu { rs1, .. }
-            | Lhu { rs1, .. } => vec![*rs1],
-            Sb { rs1, rs2, .. } | Sh { rs1, rs2, .. } | Sw { rs1, rs2, .. } => vec![*rs1, *rs2],
+            | Lhu { rs1, .. }
+            | Lwu { rs1, .. } => vec![*rs1],
+            Sb { rs1, rs2, .. } | Sh { rs1, rs2, .. } | Sw { rs1, rs2, .. } | Sd { rs1, rs2, .. } => {
+                vec![*rs1, *rs2]
+            }
             Beq { rs1, rs2, .. }
             | Bne { rs1, rs2, .. }
             | Blt { rs1, rs2, .. }
@@ -301,26 +312,26 @@ impl TargetInst for RV32Inst {
 
             Mv { rs, .. } => vec![*rs],
             Ret => vec![
-                Register::Physical(RV32Reg::Ra),
-                Register::Physical(RV32Reg::A0),
-                Register::Physical(RV32Reg::A1),
+                Register::Physical(RV64Reg::Ra),
+                Register::Physical(RV64Reg::A0),
+                Register::Physical(RV64Reg::A1),
             ],
-            Sbs { rs, .. } | Shs { rs, .. } | Sws { rs, .. } => vec![*rs],
+            Sbs { rs, .. } | Shs { rs, .. } | Sws { rs, .. } | Sds { rs, .. } => vec![*rs],
             SaveStack { rs, .. } | StoreOutgoingArg { rs, .. } => {
-                vec![Register::Physical(RV32Reg::Sp), *rs]
+                vec![Register::Physical(RV64Reg::Sp), *rs]
             }
             LoadStack { .. } | LoadIncomingArg { .. } | GetStackAddr { .. } => {
-                vec![Register::Physical(RV32Reg::Sp)]
+                vec![Register::Physical(RV64Reg::Sp)]
             }
             Call { num_args, .. } | Tail { num_args, .. } => [
-                RV32Reg::A0,
-                RV32Reg::A1,
-                RV32Reg::A2,
-                RV32Reg::A3,
-                RV32Reg::A4,
-                RV32Reg::A5,
-                RV32Reg::A6,
-                RV32Reg::A7,
+                RV64Reg::A0,
+                RV64Reg::A1,
+                RV64Reg::A2,
+                RV64Reg::A3,
+                RV64Reg::A4,
+                RV64Reg::A5,
+                RV64Reg::A6,
+                RV64Reg::A7,
             ][..(*num_args).min(8)]
                 .iter()
                 .map(|r| Register::Physical(*r))
@@ -330,7 +341,7 @@ impl TargetInst for RV32Inst {
     }
 
     fn is_terminator(&self) -> bool {
-        use RV32Inst::*;
+        use RV64Inst::*;
         matches!(
             self,
             Beq { .. }
@@ -347,35 +358,35 @@ impl TargetInst for RV32Inst {
     }
 
     fn is_ret(&self) -> bool {
-        matches!(self, RV32Inst::Ret)
+        matches!(self, RV64Inst::Ret)
     }
 
     fn load_imm(rd: Register<Self::PhysicalReg>, imm: i32) -> Self
     where
         Self: Sized,
     {
-        RV32Inst::Li { rd, imm }
+        RV64Inst::Li { rd, imm }
     }
 
     fn mv(rd: Register<Self::PhysicalReg>, rs: Register<Self::PhysicalReg>) -> Self
     where
         Self: Sized,
     {
-        RV32Inst::Mv { rd, rs }
+        RV64Inst::Mv { rd, rs }
     }
 
     fn get_successors(&self) -> Vec<BlockId> {
         match self {
-            RV32Inst::Beq { label, .. }
-            | RV32Inst::Bne { label, .. }
-            | RV32Inst::Blt { label, .. }
-            | RV32Inst::Bge { label, .. }
-            | RV32Inst::Bltu { label, .. }
-            | RV32Inst::Bgeu { label, .. } => vec![*label],
-            RV32Inst::Jal { label, .. } => vec![*label],
-            RV32Inst::Jalr { .. } => impossible!(),
-            RV32Inst::Ret => vec![],
-            RV32Inst::Tail { .. } => vec![],
+            RV64Inst::Beq { label, .. }
+            | RV64Inst::Bne { label, .. }
+            | RV64Inst::Blt { label, .. }
+            | RV64Inst::Bge { label, .. }
+            | RV64Inst::Bltu { label, .. }
+            | RV64Inst::Bgeu { label, .. } => vec![*label],
+            RV64Inst::Jal { label, .. } => vec![*label],
+            RV64Inst::Jalr { .. } => impossible!(),
+            RV64Inst::Ret => vec![],
+            RV64Inst::Tail { .. } => vec![],
             _ => vec![],
         }
     }
@@ -392,18 +403,16 @@ impl TargetInst for RV32Inst {
     }
 
     fn is_call(&self) -> bool {
-        matches!(self, RV32Inst::Call { .. })
+        matches!(self, RV64Inst::Call { .. })
     }
 
     fn size_in_bytes(&self) -> usize {
-        use RV32Inst::*;
+        use RV64Inst::*;
 
         match self {
-            // These remain pseudo-instructions in the printed assembly and are
-            // expanded by the assembler, so branch relaxation must account for
-            // their expanded size instead of assuming a single 4-byte insn.
             Call { .. } | Tail { .. } | La { .. } => 8,
-            Lbs { .. } | Lhs { .. } | Lws { .. } | Sbs { .. } | Shs { .. } | Sws { .. } => 8,
+            Lbs { .. } | Lhs { .. } | Lws { .. } | Lds { .. } | Sbs { .. } | Shs { .. }
+            | Sws { .. } | Sds { .. } => 8,
             Li { imm, .. } => {
                 if (-2048..=2047).contains(imm) {
                     4
@@ -417,12 +426,12 @@ impl TargetInst for RV32Inst {
 
     fn get_branch_target(&mut self) -> Option<&mut BlockId> {
         match self {
-            RV32Inst::Beq { label, .. }
-            | RV32Inst::Bne { label, .. }
-            | RV32Inst::Blt { label, .. }
-            | RV32Inst::Bge { label, .. }
-            | RV32Inst::Bltu { label, .. }
-            | RV32Inst::Bgeu { label, .. } => Some(label),
+            RV64Inst::Beq { label, .. }
+            | RV64Inst::Bne { label, .. }
+            | RV64Inst::Blt { label, .. }
+            | RV64Inst::Bge { label, .. }
+            | RV64Inst::Bltu { label, .. }
+            | RV64Inst::Bgeu { label, .. } => Some(label),
             _ => None,
         }
     }
@@ -432,7 +441,7 @@ impl TargetInst for RV32Inst {
     ) -> std::collections::HashMap<Register<Self::PhysicalReg>, Vec<Register<Self::PhysicalReg>>>
     {
         match self {
-            RV32Inst::SaveStack { rs, rt, .. } | RV32Inst::StoreOutgoingArg { rs, rt, .. } => {
+            RV64Inst::SaveStack { rs, rt, .. } | RV64Inst::StoreOutgoingArg { rs, rt, .. } => {
                 [(*rt, vec![*rs])].into_iter().collect()
             }
             _ => HashMap::new(),
@@ -441,17 +450,17 @@ impl TargetInst for RV32Inst {
 
     fn as_move(&self) -> Option<(Register<Self::PhysicalReg>, Register<Self::PhysicalReg>)> {
         match self {
-            RV32Inst::Mv { rd, rs } => Some((*rd, *rs)),
-            RV32Inst::Addi { rd, rs1, imm }
-            | RV32Inst::Xori { rd, rs1, imm }
-            | RV32Inst::Ori { rd, rs1, imm } => {
+            RV64Inst::Mv { rd, rs } => Some((*rd, *rs)),
+            RV64Inst::Addi { rd, rs1, imm }
+            | RV64Inst::Xori { rd, rs1, imm }
+            | RV64Inst::Ori { rd, rs1, imm } => {
                 if *imm == 0 {
                     Some((*rd, *rs1))
                 } else {
                     None
                 }
             }
-            RV32Inst::Andi { rd, rs1, imm } => {
+            RV64Inst::Andi { rd, rs1, imm } => {
                 if *imm == -1 {
                     Some((*rd, *rs1))
                 } else {
@@ -463,29 +472,29 @@ impl TargetInst for RV32Inst {
     }
 }
 
-impl LoweringTarget for RV32Arch {
-    const WORD_SIZE: usize = 4;
+impl LoweringTarget for RV64Arch {
+    const WORD_SIZE: usize = 8;
     const FRAME_ALIGN: usize = 16;
-    const SHIFT_AMT_BITS: usize = 5;
+    const SHIFT_AMT_BITS: usize = 6;
 
     fn zero_reg() -> Self::PhysicalReg {
-        RV32Reg::Zero
+        RV64Reg::Zero
     }
 
     fn return_reg() -> Self::PhysicalReg {
-        RV32Reg::A0
+        RV64Reg::A0
     }
 
     fn ra_reg() -> Self::PhysicalReg {
-        RV32Reg::Ra
+        RV64Reg::Ra
     }
 
     fn sp_reg() -> Self::PhysicalReg {
-        RV32Reg::Sp
+        RV64Reg::Sp
     }
 
     fn arg_reg(index: usize) -> Self::PhysicalReg {
-        RV32Reg::reg_a(index)
+        RV64Reg::reg_a(index)
     }
 
     fn num_arg_regs() -> usize {
@@ -493,122 +502,122 @@ impl LoweringTarget for RV32Arch {
     }
 
     fn stack_arg_size() -> usize {
-        4
+        8
     }
 
     fn stack_arg_offset(stack_index: usize) -> i32 {
-        (stack_index * 4) as i32
+        (stack_index * 8) as i32
     }
 
     fn emit_add(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
-        RV32Inst::Add { rd, rs1, rs2 }
+        RV64Inst::Add { rd, rs1, rs2 }
     }
 
     fn emit_sub(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
-        RV32Inst::Sub { rd, rs1, rs2 }
+        RV64Inst::Sub { rd, rs1, rs2 }
     }
 
     fn emit_xor(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
-        RV32Inst::Xor { rd, rs1, rs2 }
+        RV64Inst::Xor { rd, rs1, rs2 }
     }
 
     fn emit_or(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
-        RV32Inst::Or { rd, rs1, rs2 }
+        RV64Inst::Or { rd, rs1, rs2 }
     }
 
     fn emit_and(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
-        RV32Inst::And { rd, rs1, rs2 }
+        RV64Inst::And { rd, rs1, rs2 }
     }
 
     fn emit_sll(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
-        RV32Inst::Sll { rd, rs1, rs2 }
+        RV64Inst::Sll { rd, rs1, rs2 }
     }
 
     fn emit_srl(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
-        RV32Inst::Srl { rd, rs1, rs2 }
+        RV64Inst::Srl { rd, rs1, rs2 }
     }
 
     fn emit_sra(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
-        RV32Inst::Sra { rd, rs1, rs2 }
+        RV64Inst::Sra { rd, rs1, rs2 }
     }
 
     fn emit_slt(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
-        RV32Inst::Slt { rd, rs1, rs2 }
+        RV64Inst::Slt { rd, rs1, rs2 }
     }
 
     fn emit_sltu(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
-        RV32Inst::Sltu { rd, rs1, rs2 }
+        RV64Inst::Sltu { rd, rs1, rs2 }
     }
 
     fn emit_mul(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
-        RV32Inst::Mul { rd, rs1, rs2 }
+        RV64Inst::Mul { rd, rs1, rs2 }
     }
 
     fn emit_div(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
-        RV32Inst::Div { rd, rs1, rs2 }
+        RV64Inst::Div { rd, rs1, rs2 }
     }
 
     fn emit_divu(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
-        RV32Inst::Divu { rd, rs1, rs2 }
+        RV64Inst::Divu { rd, rs1, rs2 }
     }
 
     fn emit_rem(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
-        RV32Inst::Rem { rd, rs1, rs2 }
+        RV64Inst::Rem { rd, rs1, rs2 }
     }
 
     fn emit_remu(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
-        RV32Inst::Remu { rd, rs1, rs2 }
+        RV64Inst::Remu { rd, rs1, rs2 }
     }
 
     fn emit_addi(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {
-        RV32Inst::Addi { rd, rs1, imm }
+        RV64Inst::Addi { rd, rs1, imm }
     }
 
     fn emit_xori(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {
-        RV32Inst::Xori { rd, rs1, imm }
+        RV64Inst::Xori { rd, rs1, imm }
     }
 
     fn emit_ori(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {
-        RV32Inst::Ori { rd, rs1, imm }
+        RV64Inst::Ori { rd, rs1, imm }
     }
 
     fn emit_andi(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {
-        RV32Inst::Andi { rd, rs1, imm }
+        RV64Inst::Andi { rd, rs1, imm }
     }
 
     fn emit_slli(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {
-        RV32Inst::Slli { rd, rs1, imm }
+        RV64Inst::Slli { rd, rs1, imm }
     }
 
     fn emit_srli(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {
-        RV32Inst::Srli { rd, rs1, imm }
+        RV64Inst::Srli { rd, rs1, imm }
     }
 
     fn emit_srai(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {
-        RV32Inst::Srai { rd, rs1, imm }
+        RV64Inst::Srai { rd, rs1, imm }
     }
 
     fn emit_sltiu(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {
-        RV32Inst::Sltiu { rd, rs1, imm }
+        RV64Inst::Sltiu { rd, rs1, imm }
     }
 
     fn emit_branch_ne(rs1: Reg, rs2: Reg, label: BlockId) -> Self::MachineInst {
-        RV32Inst::Bne { rs1, rs2, label }
+        RV64Inst::Bne { rs1, rs2, label }
     }
 
     fn emit_jump(label: BlockId) -> Self::MachineInst {
-        RV32Inst::Jal {
-            rd: Register::Physical(RV32Reg::Zero),
+        RV64Inst::Jal {
+            rd: Register::Physical(RV64Reg::Zero),
             label,
         }
     }
 
     fn emit_call(func: SymbolId, num_args: usize) -> Self::MachineInst {
-        RV32Inst::Call { func, num_args }
+        RV64Inst::Call { func, num_args }
     }
 
     fn emit_ret() -> Self::MachineInst {
-        RV32Inst::Ret
+        RV64Inst::Ret
     }
 
     fn emit_load_mem(
@@ -619,11 +628,13 @@ impl LoweringTarget for RV32Arch {
         unsigned: bool,
     ) -> Self::MachineInst {
         match (size, unsigned) {
-            (1, false) => RV32Inst::Lb { rd, rs1, imm },
-            (1, true) => RV32Inst::Lbu { rd, rs1, imm },
-            (2, false) => RV32Inst::Lh { rd, rs1, imm },
-            (2, true) => RV32Inst::Lhu { rd, rs1, imm },
-            (4, _) => RV32Inst::Lw { rd, rs1, imm },
+            (1, false) => RV64Inst::Lb { rd, rs1, imm },
+            (1, true) => RV64Inst::Lbu { rd, rs1, imm },
+            (2, false) => RV64Inst::Lh { rd, rs1, imm },
+            (2, true) => RV64Inst::Lhu { rd, rs1, imm },
+            (4, false) => RV64Inst::Lw { rd, rs1, imm },
+            (4, true) => RV64Inst::Lwu { rd, rs1, imm },
+            (8, _) => RV64Inst::Ld { rd, rs1, imm },
             _ => panic!("unsupported load size"),
         }
     }
@@ -635,52 +646,55 @@ impl LoweringTarget for RV32Arch {
         unsigned: bool,
     ) -> Self::MachineInst {
         match (size, unsigned) {
-            (1, false) => RV32Inst::Lbs { rd, symbol },
-            (2, false) => RV32Inst::Lhs { rd, symbol },
-            (4, _) => RV32Inst::Lws { rd, symbol },
+            (1, false) => RV64Inst::Lbs { rd, symbol },
+            (2, false) => RV64Inst::Lhs { rd, symbol },
+            (4, _) => RV64Inst::Lws { rd, symbol },
+            (8, _) => RV64Inst::Lds { rd, symbol },
             _ => panic!("unsupported global load kind"),
         }
     }
 
     fn emit_load_symbol_addr(rd: Reg, symbol: SymbolId) -> Self::MachineInst {
-        RV32Inst::La { rd, label: symbol }
+        RV64Inst::La { rd, label: symbol }
     }
 
     fn emit_store_mem(rs1: Reg, rs2: Reg, imm: i32, size: usize) -> Self::MachineInst {
         match size {
-            1 => RV32Inst::Sb { rs1, rs2, imm },
-            2 => RV32Inst::Sh { rs1, rs2, imm },
-            4 => RV32Inst::Sw { rs1, rs2, imm },
+            1 => RV64Inst::Sb { rs1, rs2, imm },
+            2 => RV64Inst::Sh { rs1, rs2, imm },
+            4 => RV64Inst::Sw { rs1, rs2, imm },
+            8 => RV64Inst::Sd { rs1, rs2, imm },
             _ => panic!("unsupported store size"),
         }
     }
 
     fn emit_store_global(rs: Reg, symbol: SymbolId, size: usize, rt: Reg) -> Self::MachineInst {
         match size {
-            1 => RV32Inst::Sbs { rs, symbol, rt },
-            2 => RV32Inst::Shs { rs, symbol, rt },
-            4 => RV32Inst::Sws { rs, symbol, rt },
+            1 => RV64Inst::Sbs { rs, symbol, rt },
+            2 => RV64Inst::Shs { rs, symbol, rt },
+            4 => RV64Inst::Sws { rs, symbol, rt },
+            8 => RV64Inst::Sds { rs, symbol, rt },
             _ => panic!("unsupported global store kind"),
         }
     }
 
     fn emit_store_outgoing_arg(rs: Reg, offset: i32, rt: Reg) -> Self::MachineInst {
-        RV32Inst::StoreOutgoingArg { rs, offset, rt }
+        RV64Inst::StoreOutgoingArg { rs, offset, rt }
     }
 
     fn emit_load_incoming_arg(rd: Reg, offset: i32) -> Self::MachineInst {
-        RV32Inst::LoadIncomingArg { rd, offset }
+        RV64Inst::LoadIncomingArg { rd, offset }
     }
 
     fn emit_get_stack_addr(rd: Reg, slot: StackSlotId) -> Self::MachineInst {
-        RV32Inst::GetStackAddr { rd, slot }
+        RV64Inst::GetStackAddr { rd, slot }
     }
 
     fn emit_load_stack_slot(
         rd: Register<Self::PhysicalReg>,
         slot: StackSlotId,
     ) -> Self::MachineInst {
-        RV32Inst::LoadStack { rd, slot }
+        RV64Inst::LoadStack { rd, slot }
     }
 
     fn emit_store_stack_slot(
@@ -688,61 +702,61 @@ impl LoweringTarget for RV32Arch {
         slot: StackSlotId,
         rt: Register<Self::PhysicalReg>,
     ) -> Self::MachineInst {
-        RV32Inst::SaveStack { rs, slot, rt }
+        RV64Inst::SaveStack { rs, slot, rt }
     }
 
     fn emit_adjust_sp(offset: isize) -> Vec<Self::MachineInst> {
         if offset == 0 {
             vec![]
         } else if (-2048..=2047).contains(&offset) {
-            vec![RV32Inst::Addi {
-                rd: Register::Physical(RV32Reg::Sp),
-                rs1: Register::Physical(RV32Reg::Sp),
+            vec![RV64Inst::Addi {
+                rd: Register::Physical(RV64Reg::Sp),
+                rs1: Register::Physical(RV64Reg::Sp),
                 imm: offset as i32,
             }]
         } else {
             let temp_reg = Self::spill_scratch_regs()[0];
 
             vec![
-                RV32Inst::Li {
+                RV64Inst::Li {
                     rd: Register::Physical(temp_reg),
                     imm: offset as i32,
                 },
-                RV32Inst::Add {
-                    rd: Register::Physical(RV32Reg::Sp),
-                    rs1: Register::Physical(RV32Reg::Sp),
+                RV64Inst::Add {
+                    rd: Register::Physical(RV64Reg::Sp),
+                    rs1: Register::Physical(RV64Reg::Sp),
                     rs2: Register::Physical(temp_reg),
                 },
             ]
         }
     }
 
-    fn expand_pseudo(inst: &RV32Inst, frame_layout: &FrameLayout<RV32Arch>) -> Vec<RV32Inst>
+    fn expand_pseudo(inst: &RV64Inst, frame_layout: &FrameLayout<RV64Arch>) -> Vec<RV64Inst>
     where
         Self: Sized,
     {
-        use RV32Inst::*;
+        use RV64Inst::*;
         match inst {
             LoadStack { rd, slot } => {
                 let offset = frame_layout.slot_offsets[slot];
                 if (-2048..=2047).contains(&offset) {
-                    vec![RV32Inst::Lw {
+                    vec![RV64Inst::Ld {
                         rd: *rd,
-                        rs1: Register::Physical(RV32Reg::Sp),
+                        rs1: Register::Physical(RV64Reg::Sp),
                         imm: offset as i32,
                     }]
                 } else {
                     vec![
-                        RV32Inst::Li {
+                        RV64Inst::Li {
                             rd: *rd,
                             imm: offset as i32,
                         },
-                        RV32Inst::Add {
+                        RV64Inst::Add {
                             rd: *rd,
-                            rs1: Register::Physical(RV32Reg::Sp),
+                            rs1: Register::Physical(RV64Reg::Sp),
                             rs2: *rd,
                         },
-                        RV32Inst::Lw {
+                        RV64Inst::Ld {
                             rd: *rd,
                             rs1: *rd,
                             imm: 0,
@@ -753,23 +767,23 @@ impl LoweringTarget for RV32Arch {
             SaveStack { rs, slot, rt } => {
                 let offset = frame_layout.slot_offsets[slot];
                 if (-2048..=2047).contains(&offset) {
-                    vec![RV32Inst::Sw {
-                        rs1: Register::Physical(RV32Reg::Sp),
+                    vec![RV64Inst::Sd {
+                        rs1: Register::Physical(RV64Reg::Sp),
                         rs2: *rs,
                         imm: offset as i32,
                     }]
                 } else {
                     vec![
-                        RV32Inst::Li {
+                        RV64Inst::Li {
                             rd: *rt,
                             imm: offset as i32,
                         },
-                        RV32Inst::Add {
+                        RV64Inst::Add {
                             rd: *rt,
-                            rs1: Register::Physical(RV32Reg::Sp),
+                            rs1: Register::Physical(RV64Reg::Sp),
                             rs2: *rt,
                         },
-                        RV32Inst::Sw {
+                        RV64Inst::Sd {
                             rs1: *rt,
                             rs2: *rs,
                             imm: 0,
@@ -780,23 +794,23 @@ impl LoweringTarget for RV32Arch {
             StoreOutgoingArg { rs, offset, rt } => {
                 let offset = frame_layout.outgoing_arg_offset as i32 + *offset;
                 if (-2048..=2047).contains(&offset) {
-                    vec![RV32Inst::Sw {
-                        rs1: Register::Physical(RV32Reg::Sp),
+                    vec![RV64Inst::Sd {
+                        rs1: Register::Physical(RV64Reg::Sp),
                         rs2: *rs,
                         imm: offset,
                     }]
                 } else {
                     vec![
-                        RV32Inst::Li {
+                        RV64Inst::Li {
                             rd: *rt,
                             imm: offset,
                         },
-                        RV32Inst::Add {
+                        RV64Inst::Add {
                             rd: *rt,
-                            rs1: Register::Physical(RV32Reg::Sp),
+                            rs1: Register::Physical(RV64Reg::Sp),
                             rs2: *rt,
                         },
-                        RV32Inst::Sw {
+                        RV64Inst::Sd {
                             rs1: *rt,
                             rs2: *rs,
                             imm: 0,
@@ -807,23 +821,23 @@ impl LoweringTarget for RV32Arch {
             LoadIncomingArg { rd, offset } => {
                 let offset = frame_layout.incoming_arg_offset as i32 + *offset;
                 if (-2048..=2047).contains(&offset) {
-                    vec![RV32Inst::Lw {
+                    vec![RV64Inst::Ld {
                         rd: *rd,
-                        rs1: Register::Physical(RV32Reg::Sp),
+                        rs1: Register::Physical(RV64Reg::Sp),
                         imm: offset,
                     }]
                 } else {
                     vec![
-                        RV32Inst::Li {
+                        RV64Inst::Li {
                             rd: *rd,
                             imm: offset,
                         },
-                        RV32Inst::Add {
+                        RV64Inst::Add {
                             rd: *rd,
-                            rs1: Register::Physical(RV32Reg::Sp),
+                            rs1: Register::Physical(RV64Reg::Sp),
                             rs2: *rd,
                         },
-                        RV32Inst::Lw {
+                        RV64Inst::Ld {
                             rd: *rd,
                             rs1: *rd,
                             imm: 0,
@@ -834,20 +848,20 @@ impl LoweringTarget for RV32Arch {
             GetStackAddr { rd, slot } => {
                 let offset = frame_layout.slot_offsets[slot] as i32;
                 if (-2048..=2047).contains(&offset) {
-                    vec![RV32Inst::Addi {
+                    vec![RV64Inst::Addi {
                         rd: *rd,
-                        rs1: Register::Physical(RV32Reg::Sp),
+                        rs1: Register::Physical(RV64Reg::Sp),
                         imm: offset,
                     }]
                 } else {
                     vec![
-                        RV32Inst::Li {
+                        RV64Inst::Li {
                             rd: *rd,
                             imm: offset,
                         },
-                        RV32Inst::Add {
+                        RV64Inst::Add {
                             rd: *rd,
-                            rs1: Register::Physical(RV32Reg::Sp),
+                            rs1: Register::Physical(RV64Reg::Sp),
                             rs2: *rd,
                         },
                     ]
@@ -857,10 +871,10 @@ impl LoweringTarget for RV32Arch {
         }
     }
 
-    fn is_jump_to(inst: &RV32Inst, target: BlockId) -> bool {
+    fn is_jump_to(inst: &RV64Inst, target: BlockId) -> bool {
         match inst {
-            RV32Inst::Jal {
-                rd: Register::Physical(RV32Reg::Zero),
+            RV64Inst::Jal {
+                rd: Register::Physical(RV64Reg::Zero),
                 label,
             } => *label == target,
             _ => false,
@@ -876,23 +890,23 @@ mod tests {
 
     #[test]
     fn test_rewrite() {
-        let inst = RV32Inst::Add {
+        let inst = RV64Inst::Add {
             rd: Register::Virtual(mir::VRegId(1)),
             rs1: Register::Virtual(mir::VRegId(2)),
-            rs2: Register::Physical(RV32Reg::T0),
+            rs2: Register::Physical(RV64Reg::T0),
         };
         let mut use_rewrites = std::collections::HashMap::new();
         let mut def_rewrites = std::collections::HashMap::new();
-        use_rewrites.insert(mir::VRegId(2), Register::Physical(RV32Reg::T1));
-        def_rewrites.insert(mir::VRegId(1), Register::Physical(RV32Reg::T2));
+        use_rewrites.insert(mir::VRegId(2), Register::Physical(RV64Reg::T1));
+        def_rewrites.insert(mir::VRegId(1), Register::Physical(RV64Reg::T2));
 
         let rewritten = inst.rewrite_vreg(&use_rewrites, &def_rewrites);
         assert_eq!(
             rewritten,
-            RV32Inst::Add {
-                rd: Register::Physical(RV32Reg::T2),
-                rs1: Register::Physical(RV32Reg::T1),
-                rs2: Register::Physical(RV32Reg::T0),
+            RV64Inst::Add {
+                rd: Register::Physical(RV64Reg::T2),
+                rs1: Register::Physical(RV64Reg::T1),
+                rs2: Register::Physical(RV64Reg::T0),
             }
         );
     }

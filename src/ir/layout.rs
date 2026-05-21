@@ -102,6 +102,10 @@ impl TargetDataLayout {
         Self::new(4, 4)
     }
 
+    pub const fn rv64() -> Self {
+        Self::new(8, 8)
+    }
+
     pub const fn x86_64() -> Self {
         Self::new(8, 8)
     }
