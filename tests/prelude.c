@@ -13,12 +13,12 @@ extern size_t strlen(const char *s);
 
 struct String {
   char *data;
-  uint32_t length;
+  size_t length;
 };
 
 struct FatPtr {
   char *data;
-  uint32_t length;
+  size_t length;
 };
 
 typedef struct String String;
@@ -26,17 +26,17 @@ typedef struct String String;
 void to_string(String *string, uint32_t *self) {
   char *buffer = malloc(16);
   sprintf(buffer, "%u", *self);
-  uint32_t length = strlen(buffer);
+  size_t length = strlen(buffer);
   string->length = length;
   string->data = buffer;
 }
 
 void string_plus(String *ret, String *self, char *data, uint32_t length) {
-  uint32_t new_length = self->length + length;
+  size_t new_length = self->length + length;
   char *new_data = malloc(new_length);
-  for (int i = 0; i < self->length; i++)
+  for (size_t i = 0; i < self->length; i++)
     new_data[i] = self->data[i];
-  for (int i = 0; i < length; i++)
+  for (size_t i = 0; i < length; i++)
     new_data[i + self->length] = data[i];
   ret->data = new_data;
   ret->length = new_length;
@@ -59,7 +59,7 @@ void printlnInt(int32_t n) { printf("%d\n", n); }
 void getString(String *string) {
   size_t capacity = 16;
   char *buffer = malloc(capacity);
-  uint32_t length = 0;
+  size_t length = 0;
   int c;
 
   while ((c = getchar()) != '\n' && c != -1) {
@@ -85,4 +85,4 @@ void string_as_str(struct FatPtr *ptr, String *self) {
   ptr->length = self->length;
 }
 
-uint32_t string_len(String *self) { return self->length; }
+size_t string_len(String *self) { return self->length; }

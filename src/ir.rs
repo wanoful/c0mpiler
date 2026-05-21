@@ -85,13 +85,27 @@ impl ContextTypePool {
 #[derive(Debug, Clone)]
 pub struct LLVMContext {
     ctx_impl: Rc<RefCell<LLVMContextImpl>>,
+    target: TargetDataLayout,
 }
 
 impl LLVMContext {
-    pub fn new(_target: TargetDataLayout) -> Self {
+    pub fn new(target: TargetDataLayout) -> Self {
         Self {
             ctx_impl: Rc::new(RefCell::new(LLVMContextImpl::new())),
+            target,
         }
+    }
+
+    pub fn target_layout(&self) -> TargetDataLayout {
+        self.target
+    }
+
+    pub fn int_type(&self, bits: u8) -> IntTypePtr {
+        self.ctx_impl.borrow_mut().int_type(bits)
+    }
+
+    pub fn ptr_width_int_type(&self) -> IntTypePtr {
+        self.int_type((self.target.pointer_size * 8) as u8)
     }
 
     pub fn i1_type(&self) -> IntTypePtr {

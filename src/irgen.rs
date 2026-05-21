@@ -291,7 +291,11 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                     ResolvedTyKind::BuiltIn(builtin) => match builtin {
                         Bool => self.module.borrow_mut().add_i1_const(*i != 0),
                         Char => self.module.borrow_mut().add_int_const(8, *i as i64),
-                        I32 | ISize | U32 | USize => self.module.borrow_mut().add_i32_const(*i),
+                        I32 | U32 => self.module.borrow_mut().add_i32_const(*i),
+                        ISize | USize => {
+                            let bits = (self.context.target_layout().pointer_size * 8) as u8;
+                            self.module.borrow_mut().add_int_const(bits, *i as i64)
+                        }
                         Str => impossible!(),
                     },
                     ResolvedTyKind::Enum => self.module.borrow_mut().add_i32_const(*i),
@@ -437,11 +441,12 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
 }
 
 fn add_builtin_struct_types(context: &LLVMContext) {
+    let length_ty: TypePtr = context.ptr_width_int_type().into();
     let fat_ptr = context
         .get_named_struct_type("fat_ptr")
         .unwrap_or_else(|| context.create_opaque_struct_type("fat_ptr"));
     fat_ptr.set_body(
-        vec![context.ptr_type().into(), context.i32_type().into()],
+        vec![context.ptr_type().into(), length_ty.clone()],
         false,
     );
 
@@ -449,7 +454,7 @@ fn add_builtin_struct_types(context: &LLVMContext) {
         .get_named_struct_type("String")
         .unwrap_or_else(|| context.create_opaque_struct_type("String"));
     string.set_body(
-        vec![context.ptr_type().into(), context.i32_type().into()],
+        vec![context.ptr_type().into(), length_ty],
         false,
     );
 }
@@ -461,10 +466,11 @@ fn add_preludes(
 ) {
     let string_type: TypePtr = context.get_named_struct_type("String").unwrap().into();
     let fat_ptr_type: TypePtr = context.get_named_struct_type("fat_ptr").unwrap().into();
+    let usize_ty: TypePtr = context.ptr_width_int_type().into();
 
     let str_len_type = context.function_type(
-        context.i32_type().into(),
-        vec![context.ptr_type().into(), context.i32_type().into()],
+        usize_ty.clone(),
+        vec![context.ptr_type().into(), usize_ty.clone()],
     );
     let str_len_fn = builder
         .module()
@@ -532,8 +538,10 @@ fn add_preludes(
         },
     );
 
-    let string_len_type =
-        context.function_type(context.i32_type().into(), vec![context.ptr_type().into()]);
+    let string_len_type = context.function_type(
+        usize_ty.clone(),
+        vec![context.ptr_type().into()],
+    );
     let string_len_fn = builder
         .module()
         .borrow_mut()
@@ -616,7 +624,7 @@ fn add_preludes(
             context.ptr_type().into(),
             context.ptr_type().into(),
             context.ptr_type().into(),
-            context.i32_type().into(),
+            usize_ty.clone(),
         ],
     );
     let string_plus_fn = builder

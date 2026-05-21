@@ -93,10 +93,10 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
             BuiltIn(built_in_ty_kind) => match built_in_ty_kind {
                 BuiltInTyKind::Bool => self.context.i1_type().into(),
                 BuiltInTyKind::Char => self.context.i8_type().into(),
-                BuiltInTyKind::I32
-                | BuiltInTyKind::ISize
-                | BuiltInTyKind::U32
-                | BuiltInTyKind::USize => self.context.i32_type().into(),
+                BuiltInTyKind::I32 | BuiltInTyKind::U32 => self.context.i32_type().into(),
+                BuiltInTyKind::ISize | BuiltInTyKind::USize => {
+                    self.context.ptr_width_int_type().into()
+                }
                 BuiltInTyKind::Str => impossible!(),
             },
             Ref(inner, _) => {
