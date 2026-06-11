@@ -146,5 +146,9 @@
     {
         "name": "control2",
         "compileexitcode": 0
+    },
+    {
+        "name": "branch_relax_bool",
+        "compileexitcode": 0
     }
 ]

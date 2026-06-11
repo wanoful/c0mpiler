@@ -868,12 +868,12 @@ impl<T: LoweringTarget> Lowerer<T> {
             self.peephole_optimize(&mut machine_function);
         }
 
-        if self.options.optimize_fallthroughs {
-            self.optimize_fallthroughs(&mut machine_function);
-        }
-
         if self.options.need_branch_relaxation {
             self.relax_branches(&mut machine_function)?;
+        }
+
+        if self.options.optimize_fallthroughs {
+            self.optimize_fallthroughs(&mut machine_function);
         }
 
         Ok(machine_function)
