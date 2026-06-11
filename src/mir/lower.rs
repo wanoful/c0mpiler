@@ -463,6 +463,13 @@ fn try_emit_inline_memcpy<T: LoweringTarget>(
         machine_module,
     )?;
 
+    if size == 4 {
+        let word = Register::Virtual(machine_function.new_vreg());
+        out.push(T::emit_load_mem(word, src, 0, 4, true));
+        out.push(T::emit_store_mem(dest, word, 0, 4));
+        return Ok(true);
+    }
+
     for offset in 0..size {
         let byte = Register::Virtual(machine_function.new_vreg());
         out.push(T::emit_load_mem(byte, src, offset as i32, 1, true));
