@@ -216,6 +216,17 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     }
 
     pub(crate) fn visit_ret_expr_impl(&mut self, inner_expr: Option<&'ast Expr>, extra: ExprExtra) {
+        let is_in_main = self
+            .analyzer
+            .search_fn_scope(extra.scope_id)
+            .map_or(false, |scope_id| {
+                self.analyzer
+                    .get_scope(scope_id)
+                    .kind
+                    .as_fn()
+                    .map_or(false, |(_, main_state)| !main_state.is_not())
+            });
+
         if let Some(e) = inner_expr {
             let v = self.visit_expr(e, extra);
             if let Some(v) = v {
@@ -228,7 +239,14 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                 self.builder.build_return(v);
             }
         } else {
-            self.builder.build_return(None);
+            if is_in_main {
+                let mut module_ref = self.module.borrow_mut();
+                let zero = module_ref.add_i32_const(0);
+                drop(module_ref);
+                self.builder.build_return(Some(ValueId::Const(zero)));
+            } else {
+                self.builder.build_return(None);
+            }
         };
     }
 
