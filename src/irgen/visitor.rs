@@ -1195,8 +1195,11 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
     ) -> Self::ExprRes<'_> {
         let right_value = self.visit_expr(right, extra)?;
         let core_right_value = self.core_branch_value(right);
+        let right_value_id = right_value.value;
         self.destructing_assign(left, extra, right_value)?;
-        if let Some(core_right_value) = core_right_value {
+        if let Some(core_right_value) = core_right_value
+            && core_right_value.value != right_value_id
+        {
             self.core_destructing_assign(left, extra, core_right_value)?;
         }
         None

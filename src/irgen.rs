@@ -434,6 +434,7 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         self.opt_algebraic_simplification();
         self.opt_sccp();
         self.opt_cfg_simplify();
+        self.opt_licm();
         self.opt_adce();
         self.opt_cfg_simplify();
     }

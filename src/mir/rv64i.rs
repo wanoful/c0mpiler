@@ -97,22 +97,31 @@ generate_reg_rewrite! {
 pub enum RV64Inst {
     Add { rd: Reg, rs1: Reg, rs2: Reg },
     Sub { rd: Reg, rs1: Reg, rs2: Reg },
+    Addw { rd: Reg, rs1: Reg, rs2: Reg },
+    Subw { rd: Reg, rs1: Reg, rs2: Reg },
     Xor { rd: Reg, rs1: Reg, rs2: Reg },
     Or { rd: Reg, rs1: Reg, rs2: Reg },
     And { rd: Reg, rs1: Reg, rs2: Reg },
     Sll { rd: Reg, rs1: Reg, rs2: Reg },
     Srl { rd: Reg, rs1: Reg, rs2: Reg },
     Sra { rd: Reg, rs1: Reg, rs2: Reg },
+    Sllw { rd: Reg, rs1: Reg, rs2: Reg },
+    Srlw { rd: Reg, rs1: Reg, rs2: Reg },
+    Sraw { rd: Reg, rs1: Reg, rs2: Reg },
     Slt { rd: Reg, rs1: Reg, rs2: Reg },
     Sltu { rd: Reg, rs1: Reg, rs2: Reg },
 
     Addi { rd: Reg, rs1: Reg, imm: i32 },
+    Addiw { rd: Reg, rs1: Reg, imm: i32 },
     Xori { rd: Reg, rs1: Reg, imm: i32 },
     Ori { rd: Reg, rs1: Reg, imm: i32 },
     Andi { rd: Reg, rs1: Reg, imm: i32 },
     Slli { rd: Reg, rs1: Reg, imm: i32 },
     Srli { rd: Reg, rs1: Reg, imm: i32 },
     Srai { rd: Reg, rs1: Reg, imm: i32 },
+    Slliw { rd: Reg, rs1: Reg, imm: i32 },
+    Srliw { rd: Reg, rs1: Reg, imm: i32 },
+    Sraiw { rd: Reg, rs1: Reg, imm: i32 },
     Slti { rd: Reg, rs1: Reg, imm: i32 },
     Sltiu { rd: Reg, rs1: Reg, imm: i32 },
 
@@ -146,10 +155,15 @@ pub enum RV64Inst {
     Mulh { rd: Reg, rs1: Reg, rs2: Reg },
     Mulsu { rd: Reg, rs1: Reg, rs2: Reg },
     Mulu { rd: Reg, rs1: Reg, rs2: Reg },
+    Mulw { rd: Reg, rs1: Reg, rs2: Reg },
     Div { rd: Reg, rs1: Reg, rs2: Reg },
     Divu { rd: Reg, rs1: Reg, rs2: Reg },
     Rem { rd: Reg, rs1: Reg, rs2: Reg },
     Remu { rd: Reg, rs1: Reg, rs2: Reg },
+    Divw { rd: Reg, rs1: Reg, rs2: Reg },
+    Divuw { rd: Reg, rs1: Reg, rs2: Reg },
+    Remw { rd: Reg, rs1: Reg, rs2: Reg },
+    Remuw { rd: Reg, rs1: Reg, rs2: Reg },
 
     Mv { rd: Reg, rs: Reg },
     Li { rd: Reg, imm: i32 },
@@ -185,21 +199,30 @@ impl TargetInst for RV64Inst {
         match self {
             Add { rd, .. }
             | Sub { rd, .. }
+            | Addw { rd, .. }
+            | Subw { rd, .. }
             | Xor { rd, .. }
             | Or { rd, .. }
             | And { rd, .. }
             | Sll { rd, .. }
             | Srl { rd, .. }
             | Sra { rd, .. }
+            | Sllw { rd, .. }
+            | Srlw { rd, .. }
+            | Sraw { rd, .. }
             | Slt { rd, .. }
             | Sltu { rd, .. }
             | Addi { rd, .. }
+            | Addiw { rd, .. }
             | Xori { rd, .. }
             | Ori { rd, .. }
             | Andi { rd, .. }
             | Slli { rd, .. }
             | Srli { rd, .. }
             | Srai { rd, .. }
+            | Slliw { rd, .. }
+            | Srliw { rd, .. }
+            | Sraiw { rd, .. }
             | Slti { rd, .. }
             | Sltiu { rd, .. }
             | Lb { rd, .. }
@@ -217,10 +240,15 @@ impl TargetInst for RV64Inst {
             | Mulh { rd, .. }
             | Mulsu { rd, .. }
             | Mulu { rd, .. }
+            | Mulw { rd, .. }
             | Div { rd, .. }
             | Divu { rd, .. }
             | Rem { rd, .. }
-            | Remu { rd, .. } => vec![*rd],
+            | Remu { rd, .. }
+            | Divw { rd, .. }
+            | Divuw { rd, .. }
+            | Remw { rd, .. }
+            | Remuw { rd, .. } => vec![*rd],
             Mv { rd, .. }
             | Li { rd, .. }
             | La { rd, .. }
@@ -267,21 +295,30 @@ impl TargetInst for RV64Inst {
         match self {
             Add { rs1, rs2, .. }
             | Sub { rs1, rs2, .. }
+            | Addw { rs1, rs2, .. }
+            | Subw { rs1, rs2, .. }
             | Xor { rs1, rs2, .. }
             | Or { rs1, rs2, .. }
             | And { rs1, rs2, .. }
             | Sll { rs1, rs2, .. }
             | Srl { rs1, rs2, .. }
             | Sra { rs1, rs2, .. }
+            | Sllw { rs1, rs2, .. }
+            | Srlw { rs1, rs2, .. }
+            | Sraw { rs1, rs2, .. }
             | Slt { rs1, rs2, .. }
             | Sltu { rs1, rs2, .. } => vec![*rs1, *rs2],
             Addi { rs1, .. }
+            | Addiw { rs1, .. }
             | Xori { rs1, .. }
             | Ori { rs1, .. }
             | Andi { rs1, .. }
             | Slli { rs1, .. }
             | Srli { rs1, .. }
             | Srai { rs1, .. }
+            | Slliw { rs1, .. }
+            | Srliw { rs1, .. }
+            | Sraiw { rs1, .. }
             | Slti { rs1, .. }
             | Sltiu { rs1, .. } => vec![*rs1],
             Lb { rs1, .. }
@@ -291,7 +328,10 @@ impl TargetInst for RV64Inst {
             | Lbu { rs1, .. }
             | Lhu { rs1, .. }
             | Lwu { rs1, .. } => vec![*rs1],
-            Sb { rs1, rs2, .. } | Sh { rs1, rs2, .. } | Sw { rs1, rs2, .. } | Sd { rs1, rs2, .. } => {
+            Sb { rs1, rs2, .. }
+            | Sh { rs1, rs2, .. }
+            | Sw { rs1, rs2, .. }
+            | Sd { rs1, rs2, .. } => {
                 vec![*rs1, *rs2]
             }
             Beq { rs1, rs2, .. }
@@ -305,10 +345,15 @@ impl TargetInst for RV64Inst {
             | Mulh { rs1, rs2, .. }
             | Mulsu { rs1, rs2, .. }
             | Mulu { rs1, rs2, .. }
+            | Mulw { rs1, rs2, .. }
             | Div { rs1, rs2, .. }
             | Divu { rs1, rs2, .. }
             | Rem { rs1, rs2, .. }
-            | Remu { rs1, rs2, .. } => vec![*rs1, *rs2],
+            | Remu { rs1, rs2, .. }
+            | Divw { rs1, rs2, .. }
+            | Divuw { rs1, rs2, .. }
+            | Remw { rs1, rs2, .. }
+            | Remuw { rs1, rs2, .. } => vec![*rs1, *rs2],
 
             Mv { rs, .. } => vec![*rs],
             Ret => vec![
@@ -411,8 +456,14 @@ impl TargetInst for RV64Inst {
 
         match self {
             Call { .. } | Tail { .. } | La { .. } => 8,
-            Lbs { .. } | Lhs { .. } | Lws { .. } | Lds { .. } | Sbs { .. } | Shs { .. }
-            | Sws { .. } | Sds { .. } => 8,
+            Lbs { .. }
+            | Lhs { .. }
+            | Lws { .. }
+            | Lds { .. }
+            | Sbs { .. }
+            | Shs { .. }
+            | Sws { .. }
+            | Sds { .. } => 8,
             Li { imm, .. } => {
                 if (-2048..=2047).contains(imm) {
                     4
@@ -517,6 +568,14 @@ impl LoweringTarget for RV64Arch {
         RV64Inst::Sub { rd, rs1, rs2 }
     }
 
+    fn emit_addw(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV64Inst::Addw { rd, rs1, rs2 }
+    }
+
+    fn emit_subw(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV64Inst::Subw { rd, rs1, rs2 }
+    }
+
     fn emit_xor(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
         RV64Inst::Xor { rd, rs1, rs2 }
     }
@@ -541,6 +600,18 @@ impl LoweringTarget for RV64Arch {
         RV64Inst::Sra { rd, rs1, rs2 }
     }
 
+    fn emit_sllw(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV64Inst::Sllw { rd, rs1, rs2 }
+    }
+
+    fn emit_srlw(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV64Inst::Srlw { rd, rs1, rs2 }
+    }
+
+    fn emit_sraw(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV64Inst::Sraw { rd, rs1, rs2 }
+    }
+
     fn emit_slt(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
         RV64Inst::Slt { rd, rs1, rs2 }
     }
@@ -553,12 +624,24 @@ impl LoweringTarget for RV64Arch {
         RV64Inst::Mul { rd, rs1, rs2 }
     }
 
+    fn emit_mulw(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV64Inst::Mulw { rd, rs1, rs2 }
+    }
+
     fn emit_div(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
         RV64Inst::Div { rd, rs1, rs2 }
     }
 
     fn emit_divu(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
         RV64Inst::Divu { rd, rs1, rs2 }
+    }
+
+    fn emit_divw(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV64Inst::Divw { rd, rs1, rs2 }
+    }
+
+    fn emit_divuw(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV64Inst::Divuw { rd, rs1, rs2 }
     }
 
     fn emit_rem(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
@@ -569,8 +652,20 @@ impl LoweringTarget for RV64Arch {
         RV64Inst::Remu { rd, rs1, rs2 }
     }
 
+    fn emit_remw(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV64Inst::Remw { rd, rs1, rs2 }
+    }
+
+    fn emit_remuw(rd: Reg, rs1: Reg, rs2: Reg) -> Self::MachineInst {
+        RV64Inst::Remuw { rd, rs1, rs2 }
+    }
+
     fn emit_addi(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {
         RV64Inst::Addi { rd, rs1, imm }
+    }
+
+    fn emit_addiw(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {
+        RV64Inst::Addiw { rd, rs1, imm }
     }
 
     fn emit_xori(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {
@@ -595,6 +690,18 @@ impl LoweringTarget for RV64Arch {
 
     fn emit_srai(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {
         RV64Inst::Srai { rd, rs1, imm }
+    }
+
+    fn emit_slliw(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {
+        RV64Inst::Slliw { rd, rs1, imm }
+    }
+
+    fn emit_srliw(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {
+        RV64Inst::Srliw { rd, rs1, imm }
+    }
+
+    fn emit_sraiw(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {
+        RV64Inst::Sraiw { rd, rs1, imm }
     }
 
     fn emit_sltiu(rd: Reg, rs1: Reg, imm: i32) -> Self::MachineInst {

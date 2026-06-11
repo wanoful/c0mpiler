@@ -177,6 +177,77 @@ pub trait LoweringTarget: TargetArch + Default {
         rs2: Register<Self::PhysicalReg>,
     ) -> Self::MachineInst;
 
+    fn emit_addw(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst {
+        Self::emit_add(rd, rs1, rs2)
+    }
+    fn emit_subw(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst {
+        Self::emit_sub(rd, rs1, rs2)
+    }
+    fn emit_sllw(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst {
+        Self::emit_sll(rd, rs1, rs2)
+    }
+    fn emit_srlw(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst {
+        Self::emit_srl(rd, rs1, rs2)
+    }
+    fn emit_sraw(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst {
+        Self::emit_sra(rd, rs1, rs2)
+    }
+    fn emit_mulw(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst {
+        Self::emit_mul(rd, rs1, rs2)
+    }
+    fn emit_divw(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst {
+        Self::emit_div(rd, rs1, rs2)
+    }
+    fn emit_divuw(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst {
+        Self::emit_divu(rd, rs1, rs2)
+    }
+    fn emit_remw(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst {
+        Self::emit_rem(rd, rs1, rs2)
+    }
+    fn emit_remuw(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+    ) -> Self::MachineInst {
+        Self::emit_remu(rd, rs1, rs2)
+    }
+
     fn emit_addi(
         rd: Register<Self::PhysicalReg>,
         rs1: Register<Self::PhysicalReg>,
@@ -212,6 +283,36 @@ pub trait LoweringTarget: TargetArch + Default {
         rs1: Register<Self::PhysicalReg>,
         imm: i32,
     ) -> Self::MachineInst;
+
+    fn emit_addiw(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        imm: i32,
+    ) -> Self::MachineInst {
+        Self::emit_addi(rd, rs1, imm)
+    }
+    fn emit_slliw(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        imm: i32,
+    ) -> Self::MachineInst {
+        Self::emit_slli(rd, rs1, imm)
+    }
+    fn emit_srliw(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        imm: i32,
+    ) -> Self::MachineInst {
+        Self::emit_srli(rd, rs1, imm)
+    }
+    fn emit_sraiw(
+        rd: Register<Self::PhysicalReg>,
+        rs1: Register<Self::PhysicalReg>,
+        imm: i32,
+    ) -> Self::MachineInst {
+        Self::emit_srai(rd, rs1, imm)
+    }
+
     fn emit_sltiu(
         rd: Register<Self::PhysicalReg>,
         rs1: Register<Self::PhysicalReg>,
