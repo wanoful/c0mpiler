@@ -134,5 +134,13 @@
     {
         "name": "let_infer_struct",
         "compileexitcode": 0
+    },
+    {
+        "name": "loooong_expr",
+        "compileexitcode": 0
+    },
+    {
+        "name": "control2",
+        "compileexitcode": 0
     }
 ]
