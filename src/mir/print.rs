@@ -176,7 +176,7 @@ impl<T: TargetArch> ModulePrinter<'_, T> {
             }
             write!(f, "{b}")?;
         }
-        Ok(())
+        writeln!(f)
     }
 }
 
