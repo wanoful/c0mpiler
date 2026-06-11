@@ -291,10 +291,14 @@ fn emit_masked_value<T: LoweringTarget>(
     let mask = (1u64 << bits) - 1;
     if mask <= 0x7ff {
         out.push(T::emit_andi(rd, src, mask as i32));
-    } else {
+    } else if mask <= i32::MAX as u64 {
         let mask_reg = Register::Virtual(machine_function.new_vreg());
         out.push(T::MachineInst::load_imm(mask_reg, mask as i32));
         out.push(T::emit_and(rd, src, mask_reg));
+    } else {
+        let shift = (reg_bits - bits) as i32;
+        out.push(T::emit_slli(rd, src, shift));
+        out.push(T::emit_srli(rd, rd, shift));
     }
 
     rd
@@ -1592,8 +1596,9 @@ fn lower_const_data(
 
     match &const_data.kind {
         ConstKind::Int(number) => {
-            let bytes = (number.as_i64() as i32).to_le_bytes();
-            Ok(bytes[..(type_layout.layout.size as usize)].to_vec())
+            let size = type_layout.layout.size as usize;
+            let bytes = number.as_i64().to_le_bytes();
+            Ok(bytes[..size].to_vec())
         }
         ConstKind::Array(elements) => {
             let array_layout = type_layout.shape.as_array().unwrap();

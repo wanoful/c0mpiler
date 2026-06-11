@@ -2,7 +2,7 @@ mod common;
 
 use std::{fs, mem, panic::{self, AssertUnwindSafe}, path::PathBuf, process::{Command, Stdio}, str::FromStr};
 
-use c0mpiler::{ast::Crate, ir::layout::TargetDataLayout, irgen::IRGenerator, semantics::analyzer::SemanticAnalyzer};
+use c0mpiler::{ast::Crate, ir::layout::TargetDataLayout, irgen::IRGenerator, mir::lower::{LowerOptions, RV64Lowerer}, semantics::analyzer::SemanticAnalyzer};
 
 use common::{compare_output, load_test_infos, with_frontend};
 
@@ -200,4 +200,40 @@ fn gen_ir_rv32(analyzer: &SemanticAnalyzer, krate: &Crate) -> Result<String, Str
         g.visit(krate);
         g.print()
     })).map_err(|_| "panic during IR generation".to_string())
+}
+
+#[test]
+fn semantic_1_rv64() {
+    run_rv64_compile("RCompiler-Testcases/semantic-1", &["misc3","misc4","misc14"]);
+}
+
+fn run_rv64_compile(case_path: &str, escape_list: &[&str]) {
+    let infos = load_test_infos(case_path);
+    let (mut total, mut success) = (0, 0);
+    for x in &infos {
+        let name = &x.name;
+        if escape_list.contains(&name.as_str()) { println!("{name} skiped!"); continue; }
+        total += 1;
+        let src = fs::read_to_string(format!("{case_path}/src/{name}/{name}.rx")).unwrap();
+        match with_frontend(&src, x.compileexitcode == 0, |analyzer, krate| {
+            gen_rv64_asm(analyzer, krate)
+        }) {
+            Ok(_) | Err(_) => { println!("{name} passed!"); success += 1; }
+        }
+    }
+    println!("Test Result: {success}/{total}");
+    assert_eq!(success, total);
+}
+
+fn gen_rv64_asm(analyzer: &SemanticAnalyzer, krate: &Crate) -> Result<String, String> {
+    panic::catch_unwind(AssertUnwindSafe(|| {
+        let mut g = IRGenerator::new(analyzer, TargetDataLayout::rv64());
+        g.visit(krate);
+        g.opt_all();
+        let mut lowerer = RV64Lowerer::with_options(LowerOptions {
+            lower_function_bodies: true, need_branch_relaxation: true,
+            optimize_fallthroughs: true, optimize_peephole: true,
+        });
+        lowerer.lower_module(&g.module()).unwrap().to_string()
+    })).map_err(|_| "panic during rv64 asm generation".to_string())
 }
