@@ -140,6 +140,10 @@
         "compileexitcode": 0
     },
     {
+        "name": "expr_eval_order",
+        "compileexitcode": 0
+    },
+    {
         "name": "control2",
         "compileexitcode": 0
     }
