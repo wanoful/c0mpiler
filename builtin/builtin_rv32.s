@@ -1,292 +1,338 @@
-	.attribute	4, 16
-	.attribute	5, "rv32i2p1_m2p0_a2p1_c2p0_zmmul1p0_zaamo1p0_zalrsc1p0_zca1p0"
 	.file	"builtin.c"
+	.option pic
+	.attribute arch, "rv32i2p1_m2p0_a2p1_f2p2_d2p2_c2p0_zicsr2p0_zmmul1p0_zaamo1p0_zalrsc1p0_zca1p0_zcd1p0_zcf1p0"
+	.attribute unaligned_access, 0
+	.attribute stack_align, 16
 	.text
-	.globl	to_string                       # -- Begin function to_string
-	.p2align	1
-	.type	to_string,@function
-to_string:                              # @to_string
-# %bb.0:
-	addi	sp, sp, -16
-	sw	ra, 12(sp)                      # 4-byte Folded Spill
-	sw	s0, 8(sp)                       # 4-byte Folded Spill
-	sw	s1, 4(sp)                       # 4-byte Folded Spill
-	mv	s0, a1
-	mv	s1, a0
-	li	a0, 16
-	call	malloc
-	lw	a2, 0(s0)
-	mv	s0, a0
-	lui	a1, %hi(.L.str)
-	addi	a1, a1, %lo(.L.str)
-	call	sprintf
-	mv	a0, s0
-	call	strlen
-	sw	s0, 0(s1)
-	sw	a0, 4(s1)
-	lw	ra, 12(sp)                      # 4-byte Folded Reload
-	lw	s0, 8(sp)                       # 4-byte Folded Reload
-	lw	s1, 4(sp)                       # 4-byte Folded Reload
-	addi	sp, sp, 16
+	.section	.rodata.str1.4,"aMS",@progbits,1
+	.align	2
+.LC0:
+	.string	"%u"
+	.text
+	.align	1
+	.globl	to_string
+	.type	to_string, @function
+to_string:
+.LFB0:
+	.cfi_startproc
+	addi	sp,sp,-32
+	.cfi_def_cfa_offset 32
+	sw	s0,24(sp)
+	.cfi_offset 8, -8
+	mv	s0,a0
+	li	a0,16
+	sw	ra,28(sp)
+	sw	s1,20(sp)
+	.cfi_offset 1, -4
+	.cfi_offset 9, -12
+	sw	a1,12(sp)
+	call	malloc@plt
+	lw	a1,12(sp)
+	mv	s1,a0
+	lw	a2,0(a1)
+	lla	a1,.LC0
+	call	sprintf@plt
+	mv	a0,s1
+	call	strlen@plt
+	lw	ra,28(sp)
+	.cfi_restore 1
+	sw	s1,0(s0)
+	sw	a0,4(s0)
+	lw	s0,24(sp)
+	.cfi_restore 8
+	lw	s1,20(sp)
+	.cfi_restore 9
+	addi	sp,sp,32
+	.cfi_def_cfa_offset 0
+	jr	ra
+	.cfi_endproc
+.LFE0:
+	.size	to_string, .-to_string
+	.align	1
+	.globl	string_plus
+	.type	string_plus, @function
+string_plus:
+.LFB1:
+	.cfi_startproc
+	addi	sp,sp,-48
+	.cfi_def_cfa_offset 48
+	sw	s0,40(sp)
+	.cfi_offset 8, -8
+	lw	s0,4(a1)
+	sw	s2,32(sp)
+	sw	s1,36(sp)
+	.cfi_offset 18, -16
+	.cfi_offset 9, -12
+	add	s2,s0,a3
+	mv	s1,a0
+	mv	a0,s2
+	sw	s3,28(sp)
+	sw	a3,8(sp)
+	sw	ra,44(sp)
+	.cfi_offset 19, -20
+	.cfi_offset 1, -4
+	sw	a1,12(sp)
+	mv	s3,a2
+	call	malloc@plt
+	lw	a3,8(sp)
+	mv	a6,a0
+	beq	s0,zero,.L5
+	lw	a1,12(sp)
+	mv	a4,a0
+	lw	a5,0(a1)
+	add	a1,s0,a5
+.L6:
+	lbu	a2,0(a5)
+	addi	a5,a5,1
+	addi	a4,a4,1
+	sb	a2,-1(a4)
+	bne	a1,a5,.L6
+.L5:
+	beq	a3,zero,.L7
+	add	a0,a6,s0
+	mv	a2,a3
+	mv	a1,s3
+	sw	a6,8(sp)
+	call	memcpy@plt
+	lw	a6,8(sp)
+.L7:
+	lw	ra,44(sp)
+	.cfi_restore 1
+	lw	s0,40(sp)
+	.cfi_restore 8
+	sw	s2,4(s1)
+	sw	a6,0(s1)
+	lw	s2,32(sp)
+	.cfi_restore 18
+	lw	s1,36(sp)
+	.cfi_restore 9
+	lw	s3,28(sp)
+	.cfi_restore 19
+	addi	sp,sp,48
+	.cfi_def_cfa_offset 0
+	jr	ra
+	.cfi_endproc
+.LFE1:
+	.size	string_plus, .-string_plus
+	.align	1
+	.globl	print
+	.type	print, @function
+print:
+.LFB2:
+	.cfi_startproc
+	beq	a1,zero,.L24
+	addi	sp,sp,-16
+	.cfi_def_cfa_offset 16
+	sw	s0,8(sp)
+	sw	s1,4(sp)
+	sw	ra,12(sp)
+	.cfi_offset 8, -8
+	.cfi_offset 9, -12
+	.cfi_offset 1, -4
+	mv	s0,a0
+	add	s1,a0,a1
+.L18:
+	lbu	a0,0(s0)
+	addi	s0,s0,1
+	call	putchar@plt
+	bne	s0,s1,.L18
+	lw	ra,12(sp)
+	.cfi_restore 1
+	lw	s0,8(sp)
+	.cfi_restore 8
+	lw	s1,4(sp)
+	.cfi_restore 9
+	addi	sp,sp,16
+	.cfi_def_cfa_offset 0
+	jr	ra
+.L24:
 	ret
-.Lfunc_end0:
-	.size	to_string, .Lfunc_end0-to_string
-                                        # -- End function
-	.globl	string_plus                     # -- Begin function string_plus
-	.p2align	1
-	.type	string_plus,@function
-string_plus:                            # @string_plus
-# %bb.0:
-	addi	sp, sp, -32
-	sw	ra, 28(sp)                      # 4-byte Folded Spill
-	sw	s0, 24(sp)                      # 4-byte Folded Spill
-	sw	s1, 20(sp)                      # 4-byte Folded Spill
-	sw	s2, 16(sp)                      # 4-byte Folded Spill
-	sw	s3, 12(sp)                      # 4-byte Folded Spill
-	sw	s4, 8(sp)                       # 4-byte Folded Spill
-	sw	s5, 4(sp)                       # 4-byte Folded Spill
-	sw	s6, 0(sp)                       # 4-byte Folded Spill
-	mv	s5, a3
-	mv	s3, a2
-	mv	s1, a1
-	mv	s2, a0
-	lw	s0, 4(a1)
-	add	s4, s0, a3
-	mv	a0, s4
-	call	malloc
-	mv	s6, a0
-	add	a0, a0, s0
-	beqz	s0, .LBB1_3
-# %bb.1:
-	lw	a1, 0(s1)
-	mv	a2, s6
-.LBB1_2:                                # =>This Inner Loop Header: Depth=1
-	lbu	a3, 0(a1)
-	sb	a3, 0(a2)
-	addi	a2, a2, 1
-	addi	a1, a1, 1
-	bne	a2, a0, .LBB1_2
-.LBB1_3:
-	beqz	s5, .LBB1_5
-# %bb.4:
-	mv	a1, s3
-	mv	a2, s5
-	call	memcpy
-.LBB1_5:
-	sw	s6, 0(s2)
-	sw	s4, 4(s2)
-	lw	ra, 28(sp)                      # 4-byte Folded Reload
-	lw	s0, 24(sp)                      # 4-byte Folded Reload
-	lw	s1, 20(sp)                      # 4-byte Folded Reload
-	lw	s2, 16(sp)                      # 4-byte Folded Reload
-	lw	s3, 12(sp)                      # 4-byte Folded Reload
-	lw	s4, 8(sp)                       # 4-byte Folded Reload
-	lw	s5, 4(sp)                       # 4-byte Folded Reload
-	lw	s6, 0(sp)                       # 4-byte Folded Reload
-	addi	sp, sp, 32
+	.cfi_endproc
+.LFE2:
+	.size	print, .-print
+	.align	1
+	.globl	println
+	.type	println, @function
+println:
+.LFB3:
+	.cfi_startproc
+	beq	a1,zero,.L35
+	addi	sp,sp,-16
+	.cfi_def_cfa_offset 16
+	sw	s0,8(sp)
+	sw	s1,4(sp)
+	sw	ra,12(sp)
+	.cfi_offset 8, -8
+	.cfi_offset 9, -12
+	.cfi_offset 1, -4
+	mv	s0,a0
+	add	s1,a0,a1
+.L29:
+	lbu	a0,0(s0)
+	addi	s0,s0,1
+	call	putchar@plt
+	bne	s0,s1,.L29
+	lw	s0,8(sp)
+	.cfi_restore 8
+	lw	ra,12(sp)
+	.cfi_restore 1
+	lw	s1,4(sp)
+	.cfi_restore 9
+	li	a0,10
+	addi	sp,sp,16
+	.cfi_def_cfa_offset 0
+	tail	putchar@plt
+.L35:
+	li	a0,10
+	tail	putchar@plt
+	.cfi_endproc
+.LFE3:
+	.size	println, .-println
+	.section	.rodata.str1.4
+	.align	2
+.LC1:
+	.string	"%d"
+	.text
+	.align	1
+	.globl	printInt
+	.type	printInt, @function
+printInt:
+.LFB4:
+	.cfi_startproc
+	mv	a1,a0
+	lla	a0,.LC1
+	tail	printf@plt
+	.cfi_endproc
+.LFE4:
+	.size	printInt, .-printInt
+	.section	.rodata.str1.4
+	.align	2
+.LC2:
+	.string	"%d\n"
+	.text
+	.align	1
+	.globl	printlnInt
+	.type	printlnInt, @function
+printlnInt:
+.LFB5:
+	.cfi_startproc
+	mv	a1,a0
+	lla	a0,.LC2
+	tail	printf@plt
+	.cfi_endproc
+.LFE5:
+	.size	printlnInt, .-printlnInt
+	.align	1
+	.globl	getString
+	.type	getString, @function
+getString:
+.LFB6:
+	.cfi_startproc
+	addi	sp,sp,-32
+	.cfi_def_cfa_offset 32
+	sw	s4,8(sp)
+	.cfi_offset 20, -24
+	mv	s4,a0
+	li	a0,16
+	sw	s1,20(sp)
+	sw	s2,16(sp)
+	sw	s3,12(sp)
+	sw	ra,28(sp)
+	sw	s0,24(sp)
+	.cfi_offset 9, -12
+	.cfi_offset 18, -16
+	.cfi_offset 19, -20
+	.cfi_offset 1, -4
+	.cfi_offset 8, -8
+	call	malloc@plt
+	mv	s3,a0
+	li	s1,0
+	li	s2,16
+	j	.L41
+.L42:
+	add	a5,s3,s1
+	sb	s0,0(a5)
+	addi	s1,s1,1
+.L41:
+	call	getchar@plt
+	addi	a5,a0,1
+	mv	s0,a0
+	addi	a4,a0,-10
+	beq	a5,zero,.L45
+	beq	a4,zero,.L45
+	bgtu	s2,s1,.L42
+	slli	s2,s2,1
+	mv	a1,s2
+	mv	a0,s3
+	call	realloc@plt
+	j	.L42
+.L45:
+	lw	ra,28(sp)
+	.cfi_restore 1
+	lw	s0,24(sp)
+	.cfi_restore 8
+	sw	s3,0(s4)
+	sw	s1,4(s4)
+	lw	s2,16(sp)
+	.cfi_restore 18
+	lw	s1,20(sp)
+	.cfi_restore 9
+	lw	s3,12(sp)
+	.cfi_restore 19
+	lw	s4,8(sp)
+	.cfi_restore 20
+	addi	sp,sp,32
+	.cfi_def_cfa_offset 0
+	jr	ra
+	.cfi_endproc
+.LFE6:
+	.size	getString, .-getString
+	.align	1
+	.globl	getInt
+	.type	getInt, @function
+getInt:
+.LFB7:
+	.cfi_startproc
+	addi	sp,sp,-32
+	.cfi_def_cfa_offset 32
+	addi	a1,sp,12
+	lla	a0,.LC1
+	sw	ra,28(sp)
+	.cfi_offset 1, -4
+	call	scanf@plt
+	lw	ra,28(sp)
+	.cfi_restore 1
+	lw	a0,12(sp)
+	addi	sp,sp,32
+	.cfi_def_cfa_offset 0
+	jr	ra
+	.cfi_endproc
+.LFE7:
+	.size	getInt, .-getInt
+	.align	1
+	.globl	string_as_str
+	.type	string_as_str, @function
+string_as_str:
+.LFB8:
+	.cfi_startproc
+	lw	a4,0(a1)
+	lw	a5,4(a1)
+	sw	a4,0(a0)
+	sw	a5,4(a0)
 	ret
-.Lfunc_end1:
-	.size	string_plus, .Lfunc_end1-string_plus
-                                        # -- End function
-	.globl	print                           # -- Begin function print
-	.p2align	1
-	.type	print,@function
-print:                                  # @print
-# %bb.0:
-	beqz	a1, .LBB2_4
-# %bb.1:
-	addi	sp, sp, -16
-	sw	ra, 12(sp)                      # 4-byte Folded Spill
-	sw	s0, 8(sp)                       # 4-byte Folded Spill
-	sw	s1, 4(sp)                       # 4-byte Folded Spill
-	mv	s0, a0
-	add	s1, a0, a1
-.LBB2_2:                                # =>This Inner Loop Header: Depth=1
-	lbu	a0, 0(s0)
-	call	putchar
-	addi	s0, s0, 1
-	bne	s0, s1, .LBB2_2
-# %bb.3:
-	lw	ra, 12(sp)                      # 4-byte Folded Reload
-	lw	s0, 8(sp)                       # 4-byte Folded Reload
-	lw	s1, 4(sp)                       # 4-byte Folded Reload
-	addi	sp, sp, 16
-.LBB2_4:
+	.cfi_endproc
+.LFE8:
+	.size	string_as_str, .-string_as_str
+	.align	1
+	.globl	string_len
+	.type	string_len, @function
+string_len:
+.LFB9:
+	.cfi_startproc
+	lw	a0,4(a0)
 	ret
-.Lfunc_end2:
-	.size	print, .Lfunc_end2-print
-                                        # -- End function
-	.globl	println                         # -- Begin function println
-	.p2align	1
-	.type	println,@function
-println:                                # @println
-# %bb.0:
-	beqz	a1, .LBB3_4
-# %bb.1:
-	addi	sp, sp, -16
-	sw	ra, 12(sp)                      # 4-byte Folded Spill
-	sw	s0, 8(sp)                       # 4-byte Folded Spill
-	sw	s1, 4(sp)                       # 4-byte Folded Spill
-	mv	s0, a0
-	add	s1, a0, a1
-.LBB3_2:                                # =>This Inner Loop Header: Depth=1
-	lbu	a0, 0(s0)
-	call	putchar
-	addi	s0, s0, 1
-	bne	s0, s1, .LBB3_2
-# %bb.3:
-	lw	ra, 12(sp)                      # 4-byte Folded Reload
-	lw	s0, 8(sp)                       # 4-byte Folded Reload
-	lw	s1, 4(sp)                       # 4-byte Folded Reload
-	addi	sp, sp, 16
-.LBB3_4:
-	li	a0, 10
-	tail	putchar
-.Lfunc_end3:
-	.size	println, .Lfunc_end3-println
-                                        # -- End function
-	.globl	printInt                        # -- Begin function printInt
-	.p2align	1
-	.type	printInt,@function
-printInt:                               # @printInt
-# %bb.0:
-	lui	a1, %hi(.L.str.1)
-	addi	a1, a1, %lo(.L.str.1)
-	mv	a2, a0
-	mv	a0, a1
-	mv	a1, a2
-	tail	printf
-.Lfunc_end4:
-	.size	printInt, .Lfunc_end4-printInt
-                                        # -- End function
-	.globl	printlnInt                      # -- Begin function printlnInt
-	.p2align	1
-	.type	printlnInt,@function
-printlnInt:                             # @printlnInt
-# %bb.0:
-	lui	a1, %hi(.L.str.2)
-	addi	a1, a1, %lo(.L.str.2)
-	mv	a2, a0
-	mv	a0, a1
-	mv	a1, a2
-	tail	printf
-.Lfunc_end5:
-	.size	printlnInt, .Lfunc_end5-printlnInt
-                                        # -- End function
-	.globl	getString                       # -- Begin function getString
-	.p2align	1
-	.type	getString,@function
-getString:                              # @getString
-# %bb.0:
-	addi	sp, sp, -32
-	sw	ra, 28(sp)                      # 4-byte Folded Spill
-	sw	s0, 24(sp)                      # 4-byte Folded Spill
-	sw	s1, 20(sp)                      # 4-byte Folded Spill
-	sw	s2, 16(sp)                      # 4-byte Folded Spill
-	sw	s3, 12(sp)                      # 4-byte Folded Spill
-	sw	s4, 8(sp)                       # 4-byte Folded Spill
-	sw	s5, 4(sp)                       # 4-byte Folded Spill
-	sw	s6, 0(sp)                       # 4-byte Folded Spill
-	mv	s2, a0
-	li	a0, 16
-	li	s4, 16
-	call	malloc
-	mv	s3, a0
-	li	s1, 0
-	li	s5, -1
-	li	s6, 10
-	j	.LBB6_2
-.LBB6_1:                                #   in Loop: Header=BB6_2 Depth=1
-	add	a0, s3, s1
-	addi	s1, s1, 1
-	sb	s0, 0(a0)
-.LBB6_2:                                # =>This Inner Loop Header: Depth=1
-	call	getchar
-	beq	a0, s5, .LBB6_6
-# %bb.3:                                #   in Loop: Header=BB6_2 Depth=1
-	mv	s0, a0
-	beq	a0, s6, .LBB6_6
-# %bb.4:                                #   in Loop: Header=BB6_2 Depth=1
-	bltu	s1, s4, .LBB6_1
-# %bb.5:                                #   in Loop: Header=BB6_2 Depth=1
-	slli	s4, s4, 1
-	mv	a0, s3
-	mv	a1, s4
-	call	realloc
-	j	.LBB6_1
-.LBB6_6:
-	sw	s3, 0(s2)
-	sw	s1, 4(s2)
-	lw	ra, 28(sp)                      # 4-byte Folded Reload
-	lw	s0, 24(sp)                      # 4-byte Folded Reload
-	lw	s1, 20(sp)                      # 4-byte Folded Reload
-	lw	s2, 16(sp)                      # 4-byte Folded Reload
-	lw	s3, 12(sp)                      # 4-byte Folded Reload
-	lw	s4, 8(sp)                       # 4-byte Folded Reload
-	lw	s5, 4(sp)                       # 4-byte Folded Reload
-	lw	s6, 0(sp)                       # 4-byte Folded Reload
-	addi	sp, sp, 32
-	ret
-.Lfunc_end6:
-	.size	getString, .Lfunc_end6-getString
-                                        # -- End function
-	.globl	getInt                          # -- Begin function getInt
-	.p2align	1
-	.type	getInt,@function
-getInt:                                 # @getInt
-# %bb.0:
-	addi	sp, sp, -16
-	sw	ra, 12(sp)                      # 4-byte Folded Spill
-	lui	a0, %hi(.L.str.1)
-	addi	a0, a0, %lo(.L.str.1)
-	addi	a1, sp, 8
-	call	scanf
-	lw	a0, 8(sp)
-	lw	ra, 12(sp)                      # 4-byte Folded Reload
-	addi	sp, sp, 16
-	ret
-.Lfunc_end7:
-	.size	getInt, .Lfunc_end7-getInt
-                                        # -- End function
-	.globl	string_as_str                   # -- Begin function string_as_str
-	.p2align	1
-	.type	string_as_str,@function
-string_as_str:                          # @string_as_str
-# %bb.0:
-	lw	a2, 0(a1)
-	lw	a1, 4(a1)
-	sw	a2, 0(a0)
-	sw	a1, 4(a0)
-	ret
-.Lfunc_end8:
-	.size	string_as_str, .Lfunc_end8-string_as_str
-                                        # -- End function
-	.globl	string_len                      # -- Begin function string_len
-	.p2align	1
-	.type	string_len,@function
-string_len:                             # @string_len
-# %bb.0:
-	lw	a0, 4(a0)
-	ret
-.Lfunc_end9:
-	.size	string_len, .Lfunc_end9-string_len
-                                        # -- End function
-	.type	.L.str,@object                  # @.str
-	.section	.rodata.str1.1,"aMS",@progbits,1
-.L.str:
-	.asciz	"%u"
-	.size	.L.str, 3
-
-	.type	.L.str.1,@object                # @.str.1
-.L.str.1:
-	.asciz	"%d"
-	.size	.L.str.1, 3
-
-	.type	.L.str.2,@object                # @.str.2
-.L.str.2:
-	.asciz	"%d\n"
-	.size	.L.str.2, 4
-
-	.ident	"clang version 22.1.6"
-	.section	".note.GNU-stack","",@progbits
-	.addrsig
+	.cfi_endproc
+.LFE9:
+	.size	string_len, .-string_len
+	.ident	"GCC: (GNU) 15.1.0"
+	.section	.note.GNU-stack,"",@progbits
