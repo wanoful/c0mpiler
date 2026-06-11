@@ -2,3 +2,6 @@
 
 run:
 	@cargo run -q -- --target rv64 --emit asm
+
+build:
+	cargo build --release
