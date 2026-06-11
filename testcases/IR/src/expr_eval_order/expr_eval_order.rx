@@ -1,0 +1,28 @@
+// Binary and comparison operands must be materialized left-to-right.
+fn main() {
+    let mut x: i32 = 1;
+    let y: i32 = x + {
+        x = 10;
+        2
+    };
+    printlnInt(y);
+    printlnInt(x);
+
+    let mut a: i32 = 3;
+    let z: i32 = a * 4 + {
+        a = 7;
+        5
+    } + a;
+    printlnInt(z);
+    printlnInt(a);
+
+    let mut c: i32 = 1;
+    let lt: bool = c < {
+        c = 9;
+        5
+    };
+    printlnInt(lt as i32);
+    printlnInt(c);
+
+    exit(0);
+}

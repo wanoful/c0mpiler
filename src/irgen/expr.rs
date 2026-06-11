@@ -2,8 +2,8 @@ use std::iter::once;
 
 use crate::{
     ast::{
-        NodeId,
         expr::{BinOp, Expr},
+        NodeId,
     },
     impossible,
     ir::{
@@ -12,9 +12,9 @@ use crate::{
         ir_type::TypePtr,
     },
     irgen::{
-        IRGenerator,
         extra::ExprExtra,
         value::{CoreContainerKind, CoreValueContainer, ValueKind},
+        IRGenerator,
     },
     semantics::{analyzer::SemanticAnalyzer, visitor::Visitor},
 };
@@ -29,18 +29,16 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     ) -> Option<CoreValueContainer> {
         let self_intern = self.analyzer.get_expr_type(&extra.self_id);
         let self_probe = self.analyzer.probe_type(self_intern).unwrap();
-        let value1 = self.visit_expr(expr1, extra)?;
-        let value2 = self.visit_expr(expr2, extra)?;
         if SemanticAnalyzer::is_string_type(&self_probe) {
+            let value1 = self.visit_expr(expr1, extra)?;
+            let value1 = self.get_value_presentation(value1);
+            let value2 = self.visit_expr(expr2, extra)?;
+            let value2 = self.get_value_presentation(value2);
             let string_ty: TypePtr = self.context.get_named_struct_type("String").unwrap().into();
             let ret = self.build_alloca(string_ty.clone(), None);
             let func = self.module.borrow().get_function("string_plus").unwrap();
             let args = once(ret)
-                .chain(
-                    vec![value1, value2]
-                        .into_iter()
-                        .flat_map(|x| self.get_value_presentation(x).flatten()),
-                )
+                .chain(vec![value1, value2].into_iter().flat_map(|x| x.flatten()))
                 .collect();
             self.builder.build_call(func, args, None);
             self.set_expr_value(
@@ -56,7 +54,9 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                 kind: CoreContainerKind::Ptr(string_ty),
             })
         } else {
+            let value1 = self.visit_expr(expr1, extra)?;
             let raw1 = self.get_raw_value(value1);
+            let value2 = self.visit_expr(expr2, extra)?;
             let raw2 = self.get_raw_value(value2);
 
             let intern = self.analyzer.get_expr_type(&extra.self_id);
@@ -125,7 +125,9 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         extra: ExprExtra,
     ) -> Option<CoreValueContainer> {
         let value1 = self.visit_expr(expr1, extra)?;
+        let lhs = self.get_raw_value(value1);
         let value2 = self.visit_expr(expr2, extra)?;
+        let rhs = self.get_raw_value(value2);
 
         let intern1 = self.analyzer.get_expr_type(&expr1.id);
         let resolved_ty1 = self.analyzer.probe_type(intern1).unwrap();
@@ -165,8 +167,6 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
             _ => impossible!(),
         };
 
-        let lhs = self.get_raw_value(value1);
-        let rhs = self.get_raw_value(value2);
         let value = self.builder.build_icmp(op_code, lhs, rhs, None);
         let value = CoreValueContainer {
             value: ValueId::Inst(value),
