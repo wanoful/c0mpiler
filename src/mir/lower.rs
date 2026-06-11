@@ -527,6 +527,9 @@ fn emit_add_offset<T: LoweringTarget>(
         && let ConstKind::Int(number) = &module.const_data(constant).kind
     {
         let imm = (number.as_i64() as i32).checked_mul(stride as i32).unwrap();
+        if imm == 0 {
+            return Ok(base);
+        }
         if (-2048..=2047).contains(&imm) {
             let result_reg = Register::Virtual(machine_function.new_vreg());
             out.push(T::emit_addi(result_reg, base, imm));
@@ -1483,22 +1486,28 @@ impl<T: LoweringTarget> Lowerer<T> {
                                     });
                                 };
                                 let field_layout = &struct_layout.fields[field_index];
-                                let temp_reg = Register::Virtual(machine_function.new_vreg());
-                                if field_layout.offset <= 2047 {
+                                if field_layout.offset == 0 {
+                                    // base unchanged
+                                } else if field_layout.offset <= 2047 {
+                                    let temp_reg =
+                                        Register::Virtual(machine_function.new_vreg());
                                     out.push(T::emit_addi(
                                         temp_reg,
                                         base,
                                         field_layout.offset as i32,
                                     ));
+                                    base = temp_reg;
                                 } else {
                                     let imm_reg = Register::Virtual(machine_function.new_vreg());
                                     out.push(T::MachineInst::load_imm(
                                         imm_reg,
                                         field_layout.offset as i32,
                                     ));
+                                    let temp_reg =
+                                        Register::Virtual(machine_function.new_vreg());
                                     out.push(T::emit_add(temp_reg, base, imm_reg));
+                                    base = temp_reg;
                                 }
-                                base = temp_reg;
                                 ty = ty.as_struct().unwrap().get_body().unwrap()[field_index]
                                     .clone();
                             }
