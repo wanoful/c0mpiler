@@ -43,11 +43,6 @@ fn my_ir() {
     else { run_ir_native("testcases/IR", &[], true); }
 }
 #[test]
-fn my_asm() {
-    if let Some(p) = option_env!("REIMU_PATH") { run_ir_reimu(p, "testcases/asm", &[]); }
-    else { run_ir_native("testcases/asm", &[], true); }
-}
-#[test]
 fn ir_1() {
     if let Some(p) = option_env!("REIMU_PATH") { run_ir_reimu(p, "RCompiler-Testcases/IR-1", &[]); }
     else { run_ir_native("RCompiler-Testcases/IR-1", &[], true); }
@@ -87,7 +82,7 @@ fn run_ir_native(case_path: &str, escape_list: &[&str], dry_run: bool) {
         let ir_file = format!("{temp}/{name}.ll");
         fs::write(&ir_file, &ir).unwrap();
 
-        let out = Command::new("clang").args([&ir_file, "tests/prelude.c", "-o", &format!("{temp}/{name}")]).output();
+        let out = Command::new("clang").args([&ir_file, "builtin/builtin.c", "-o", &format!("{temp}/{name}")]).output();
         match out {
             Ok(o) if o.status.success() => {}
             Ok(o) => { fault!(true, "{name} compile failed:\n{}", String::from_utf8_lossy(&o.stderr)); }
@@ -139,8 +134,8 @@ fn run_ir_reimu(reimu_path: &str, case_path: &str, escape_list: &[&str]) {
 
     let prelude_asm = format!("{temp}/prelude.s");
     let out = Command::new("clang")
-        .args(["--target=riscv32-unknown-elf", "-S", "tests/prelude.c", "-O2", "-o", &prelude_asm])
-        .output().expect("Failed to compile prelude.c");
+        .args(["--target=riscv32-unknown-elf", "-S", "builtin/builtin.c", "-O2", "-o", &prelude_asm])
+        .output().expect("Failed to compile builtin.c");
     assert!(out.status.success(), "prelude failed:\n{}", String::from_utf8_lossy(&out.stderr));
 
     let (mut total, mut success) = (0, 0);

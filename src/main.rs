@@ -10,7 +10,8 @@ use c0mpiler::{
     semantics::analyzer::SemanticAnalyzer,
 };
 
-const PRELUDE: &str = include_str!("../tests/prelude.c");
+const BUILTIN_RV32: &str = include_str!("../builtin/builtin_rv32.s");
+const BUILTIN_RV64: &str = include_str!("../builtin/builtin_rv64.s");
 
 #[derive(Parser)]
 #[command(name = "c0mpiler", about = "A compiler for the .rx language")]
@@ -26,9 +27,9 @@ struct Args {
     #[arg(short, long, default_value = "asm", value_parser = ["ir", "asm"])]
     emit: String,
 
-    /// Suppress prelude output on stderr
+    /// Suppress builtin.s output on stderr
     #[arg(long)]
-    no_prelude: bool,
+    no_builtin: bool,
 }
 
 fn main() {
@@ -107,7 +108,11 @@ fn main() {
         }
     }
 
-    if !args.no_prelude {
-        eprint!("{PRELUDE}");
+    if !args.no_builtin {
+        let builtin = match args.target.as_str() {
+            "rv64" => BUILTIN_RV64,
+            _ => BUILTIN_RV32,
+        };
+        eprint!("{builtin}");
     }
 }

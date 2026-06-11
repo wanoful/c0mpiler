@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::ir::{
-    core::{ArgRef, BlockId, BlockRef, FunctionId, InstId, InstRef, ModuleCore, ValueId},
+    core::{ArgRef, BlockId, BlockRef, FunctionId, InstRef, ModuleCore, ValueId},
     core_inst::{CondBranch, InstKind, PhiIncoming},
     ir_type::{Type, VoidType},
 };

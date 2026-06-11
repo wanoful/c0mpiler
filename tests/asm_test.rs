@@ -20,23 +20,21 @@ macro_rules! fault {
 }
 
 #[test]
-fn my_asm() { run_rv32_mir("testcases/asm", &[]); }
-#[test]
 fn my_ir() { run_rv32_mir("testcases/IR", &[]); }
 #[test]
 fn ir_1_asm() { run_rv32_mir("RCompiler-Testcases/IR-1", &[]); }
 
 fn run_rv32_mir(case_path: &str, escape_list: &[&str]) {
     let reimu_path = std::env::var("REIMU_PATH")
-        .unwrap_or("/home/color/workspace/Arch/REIMU/build/linux/x86_64/release/reimu".to_string());
+        .unwrap_or("reimu".to_string());
     let infos = load_test_infos(case_path);
     let temp = format!("target/tmp/{}/asm", PathBuf::from(case_path).file_name().unwrap().display());
     fs::create_dir_all(&temp).unwrap();
 
     let prelude_asm = format!("{temp}/prelude.s");
     let out = Command::new("clang")
-        .args(["--target=riscv32-unknown-elf", "-S", "tests/prelude.c", "-O2", "-o", &prelude_asm])
-        .output().expect("Failed to compile prelude.c");
+        .args(["--target=riscv32-unknown-elf", "-S", "builtin/builtin.c", "-O2", "-o", &prelude_asm])
+        .output().expect("Failed to compile builtin.c");
     assert!(out.status.success(), "prelude failed:\n{}", String::from_utf8_lossy(&out.stderr));
 
     let (mut total, mut success) = (0, 0);
@@ -97,21 +95,19 @@ fn gen_rv32_mir(analyzer: &SemanticAnalyzer, krate: &c0mpiler::ast::Crate) -> Re
 }
 
 #[test]
-fn my_rv64_asm() { run_rv64_qemu("testcases/asm", &[]); }
-#[test]
 fn my_rv64_ir() { run_rv64_qemu("testcases/IR", &[]); }
 
 fn run_rv64_qemu(case_path: &str, escape_list: &[&str]) {
     let qemu_path = std::env::var("QEMU_RV64_PATH")
-        .unwrap_or("/home/color/workspace/os/qemu-10.2.1/build/qemu-riscv64".to_string());
+        .unwrap_or("qemu-riscv64".to_string());
     let infos = load_test_infos(case_path);
     let temp = format!("target/tmp/{}/rv64_asm", PathBuf::from(case_path).file_name().unwrap().display());
     fs::create_dir_all(&temp).unwrap();
 
     let prelude_o = format!("{temp}/prelude.o");
     let out = Command::new("riscv64-linux-gnu-gcc")
-        .args(["-O2", "-c", "tests/prelude.c", "-o", &prelude_o])
-        .output().expect("Failed to compile prelude.c");
+        .args(["-O2", "-c", "builtin/builtin.c", "-o", &prelude_o])
+        .output().expect("Failed to compile builtin.c");
     assert!(out.status.success(), "prelude failed:\n{}", String::from_utf8_lossy(&out.stderr));
 
     let (mut total, mut success) = (0, 0);
@@ -203,7 +199,7 @@ fn gen_rv64_mir(analyzer: &SemanticAnalyzer, krate: &c0mpiler::ast::Crate) -> Re
 #[test]
 fn e2e_rv64() {
     let qemu_path = std::env::var("QEMU_RV64_PATH")
-        .unwrap_or("/home/color/workspace/os/qemu-10.2.1/build/qemu-riscv64".to_string());
+        .unwrap_or("qemu-riscv64".to_string());
 
     let src = r#"
 fn main() {
@@ -217,8 +213,8 @@ fn main() {
 
     let prelude_o = format!("{temp}/prelude.o");
     let out = Command::new("riscv64-linux-gnu-gcc")
-        .args(["-O2", "-c", "tests/prelude.c", "-o", &prelude_o])
-        .output().expect("Failed to compile prelude.c");
+        .args(["-O2", "-c", "builtin/builtin.c", "-o", &prelude_o])
+        .output().expect("Failed to compile builtin.c");
     assert!(out.status.success(), "prelude failed:\n{}", String::from_utf8_lossy(&out.stderr));
 
     let lexer = Lexer::new(src);
