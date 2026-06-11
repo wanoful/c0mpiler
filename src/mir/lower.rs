@@ -304,6 +304,97 @@ fn emit_masked_value<T: LoweringTarget>(
     rd
 }
 
+fn emit_sign_extended_value<T: LoweringTarget>(
+    src: Register<T::PhysicalReg>,
+    bits: u8,
+    out: &mut Vec<T::MachineInst>,
+    machine_function: &mut MachineFunction<T>,
+) -> Register<T::PhysicalReg> {
+    let reg_bits = (T::WORD_SIZE * 8) as u8;
+    if bits >= reg_bits {
+        return src;
+    }
+
+    let rd = Register::Virtual(machine_function.new_vreg());
+    let shift = (reg_bits - bits) as i32;
+    out.push(T::emit_slli(rd, src, shift));
+    out.push(T::emit_srai(rd, rd, shift));
+    rd
+}
+
+fn int_bits_for_value(module: &ModuleCore, value: ValueId) -> Option<u8> {
+    module.value_ty(value).as_int().map(|int_ty| int_ty.0)
+}
+
+fn emit_normalized_int_value<T: LoweringTarget>(
+    src: Register<T::PhysicalReg>,
+    bits: u8,
+    signed: bool,
+    out: &mut Vec<T::MachineInst>,
+    machine_function: &mut MachineFunction<T>,
+) -> Register<T::PhysicalReg> {
+    if signed {
+        emit_sign_extended_value(src, bits, out, machine_function)
+    } else {
+        emit_masked_value(src, bits, out, machine_function)
+    }
+}
+
+fn emit_copy_or_move<T: LoweringTarget>(
+    dst: Register<T::PhysicalReg>,
+    src: Register<T::PhysicalReg>,
+    out: &mut Vec<T::MachineInst>,
+) {
+    if dst != src {
+        out.push(T::MachineInst::mv(dst, src));
+    }
+}
+
+fn binary_operands_are_signed(op: &BinaryOpcode) -> bool {
+    matches!(
+        op,
+        BinaryOpcode::SDiv | BinaryOpcode::SRem | BinaryOpcode::AShr
+    )
+}
+
+fn binary_result_is_signed(op: &BinaryOpcode) -> bool {
+    matches!(
+        op,
+        BinaryOpcode::Add
+            | BinaryOpcode::Sub
+            | BinaryOpcode::Mul
+            | BinaryOpcode::SDiv
+            | BinaryOpcode::SRem
+            | BinaryOpcode::AShr
+    )
+}
+
+fn binary_result_needs_normalization(op: &BinaryOpcode) -> bool {
+    matches!(
+        op,
+        BinaryOpcode::Add
+            | BinaryOpcode::Sub
+            | BinaryOpcode::Mul
+            | BinaryOpcode::UDiv
+            | BinaryOpcode::SDiv
+            | BinaryOpcode::URem
+            | BinaryOpcode::SRem
+            | BinaryOpcode::Shl
+            | BinaryOpcode::LShr
+            | BinaryOpcode::AShr
+            | BinaryOpcode::And
+            | BinaryOpcode::Or
+            | BinaryOpcode::Xor
+    )
+}
+
+fn icmp_operands_are_signed(icmp_code: &ICmpCode) -> bool {
+    matches!(
+        icmp_code,
+        ICmpCode::Sgt | ICmpCode::Sge | ICmpCode::Slt | ICmpCode::Sle
+    )
+}
+
 fn emit_add_offset<T: LoweringTarget>(
     module: &ModuleCore,
     base: Register<T::PhysicalReg>,
@@ -809,7 +900,16 @@ impl<T: LoweringTarget> Lowerer<T> {
 
         match &inst.kind {
             InstKind::Binary { op, lhs, rhs } => {
-                let rs1 = lower_operand(
+                let result_bits = module
+                    .value_ty(ValueId::Inst(instruction))
+                    .as_int()
+                    .map(|int_ty| int_ty.0)
+                    .unwrap_or((T::WORD_SIZE * 8) as u8);
+                let operand_bits = int_bits_for_value(module, *lhs).unwrap_or(result_bits);
+                let operands_signed = binary_operands_are_signed(op);
+                let result_signed = binary_result_is_signed(op);
+
+                let mut rs1 = lower_operand(
                     module,
                     *lhs,
                     &mut out,
@@ -817,6 +917,13 @@ impl<T: LoweringTarget> Lowerer<T> {
                     machine_function,
                     machine_module,
                 )?;
+                rs1 = emit_normalized_int_value(
+                    rs1,
+                    operand_bits,
+                    operands_signed,
+                    &mut out,
+                    machine_function,
+                );
 
                 if let ValueId::Const(constant) = *rhs
                     && let ConstKind::Int(number) = &module.const_data(constant).kind
@@ -836,42 +943,57 @@ impl<T: LoweringTarget> Lowerer<T> {
                     let rd = Register::Virtual(rd_vreg);
                     let imm = number.as_i64() as i32;
                     let shift_amt_limit = 1 << T::SHIFT_AMT_BITS;
+                    let raw_rd = if binary_result_needs_normalization(op) {
+                        Register::Virtual(machine_function.new_vreg())
+                    } else {
+                        rd
+                    };
                     let lowered = match op {
                         BinaryOpcode::Add if (-2048..=2047).contains(&imm) => {
-                            Some(T::emit_addi(rd, rs1, imm))
+                            Some(T::emit_addi(raw_rd, rs1, imm))
                         }
                         BinaryOpcode::Sub => imm
                             .checked_neg()
                             .filter(|neg_imm| (-2048..=2047).contains(neg_imm))
-                            .map(|neg_imm| T::emit_addi(rd, rs1, neg_imm)),
+                            .map(|neg_imm| T::emit_addi(raw_rd, rs1, neg_imm)),
                         BinaryOpcode::Shl if (0..shift_amt_limit).contains(&(imm as usize)) => {
-                            Some(T::emit_slli(rd, rs1, imm))
+                            Some(T::emit_slli(raw_rd, rs1, imm))
                         }
                         BinaryOpcode::LShr if (0..shift_amt_limit).contains(&(imm as usize)) => {
-                            Some(T::emit_srli(rd, rs1, imm))
+                            Some(T::emit_srli(raw_rd, rs1, imm))
                         }
                         BinaryOpcode::AShr if (0..shift_amt_limit).contains(&(imm as usize)) => {
-                            Some(T::emit_srai(rd, rs1, imm))
+                            Some(T::emit_srai(raw_rd, rs1, imm))
                         }
                         BinaryOpcode::And if (-2048..=2047).contains(&imm) => {
-                            Some(T::emit_andi(rd, rs1, imm))
+                            Some(T::emit_andi(raw_rd, rs1, imm))
                         }
                         BinaryOpcode::Or if (-2048..=2047).contains(&imm) => {
-                            Some(T::emit_ori(rd, rs1, imm))
+                            Some(T::emit_ori(raw_rd, rs1, imm))
                         }
                         BinaryOpcode::Xor if (-2048..=2047).contains(&imm) => {
-                            Some(T::emit_xori(rd, rs1, imm))
+                            Some(T::emit_xori(raw_rd, rs1, imm))
                         }
                         _ => None,
                     };
 
                     if let Some(lowered) = lowered {
                         out.push(lowered);
+                        if binary_result_needs_normalization(op) {
+                            let normalized = emit_normalized_int_value(
+                                raw_rd,
+                                result_bits,
+                                result_signed,
+                                &mut out,
+                                machine_function,
+                            );
+                            emit_copy_or_move::<T>(rd, normalized, &mut out);
+                        }
                         return Ok(out);
                     }
                 }
 
-                let rs2 = lower_operand(
+                let mut rs2 = lower_operand(
                     module,
                     *rhs,
                     &mut out,
@@ -879,26 +1001,49 @@ impl<T: LoweringTarget> Lowerer<T> {
                     machine_function,
                     machine_module,
                 )?;
+                let rhs_bits = int_bits_for_value(module, *rhs).unwrap_or(operand_bits);
+                rs2 = emit_normalized_int_value(
+                    rs2,
+                    rhs_bits,
+                    operands_signed,
+                    &mut out,
+                    machine_function,
+                );
                 let rd_vreg = self.ensure_inst_vreg(instruction, machine_function, state);
                 let rd = Register::Virtual(rd_vreg);
+                let raw_rd = if binary_result_needs_normalization(op) {
+                    Register::Virtual(machine_function.new_vreg())
+                } else {
+                    rd
+                };
 
                 let lowered = match op {
-                    BinaryOpcode::Add => T::emit_add(rd, rs1, rs2),
-                    BinaryOpcode::Sub => T::emit_sub(rd, rs1, rs2),
-                    BinaryOpcode::Mul => T::emit_mul(rd, rs1, rs2),
-                    BinaryOpcode::UDiv => T::emit_divu(rd, rs1, rs2),
-                    BinaryOpcode::SDiv => T::emit_div(rd, rs1, rs2),
-                    BinaryOpcode::URem => T::emit_remu(rd, rs1, rs2),
-                    BinaryOpcode::SRem => T::emit_rem(rd, rs1, rs2),
-                    BinaryOpcode::And => T::emit_and(rd, rs1, rs2),
-                    BinaryOpcode::Or => T::emit_or(rd, rs1, rs2),
-                    BinaryOpcode::Xor => T::emit_xor(rd, rs1, rs2),
-                    BinaryOpcode::Shl => T::emit_sll(rd, rs1, rs2),
-                    BinaryOpcode::LShr => T::emit_srl(rd, rs1, rs2),
-                    BinaryOpcode::AShr => T::emit_sra(rd, rs1, rs2),
+                    BinaryOpcode::Add => T::emit_add(raw_rd, rs1, rs2),
+                    BinaryOpcode::Sub => T::emit_sub(raw_rd, rs1, rs2),
+                    BinaryOpcode::Mul => T::emit_mul(raw_rd, rs1, rs2),
+                    BinaryOpcode::UDiv => T::emit_divu(raw_rd, rs1, rs2),
+                    BinaryOpcode::SDiv => T::emit_div(raw_rd, rs1, rs2),
+                    BinaryOpcode::URem => T::emit_remu(raw_rd, rs1, rs2),
+                    BinaryOpcode::SRem => T::emit_rem(raw_rd, rs1, rs2),
+                    BinaryOpcode::And => T::emit_and(raw_rd, rs1, rs2),
+                    BinaryOpcode::Or => T::emit_or(raw_rd, rs1, rs2),
+                    BinaryOpcode::Xor => T::emit_xor(raw_rd, rs1, rs2),
+                    BinaryOpcode::Shl => T::emit_sll(raw_rd, rs1, rs2),
+                    BinaryOpcode::LShr => T::emit_srl(raw_rd, rs1, rs2),
+                    BinaryOpcode::AShr => T::emit_sra(raw_rd, rs1, rs2),
                 };
 
                 out.push(lowered);
+                if binary_result_needs_normalization(op) {
+                    let normalized = emit_normalized_int_value(
+                        raw_rd,
+                        result_bits,
+                        result_signed,
+                        &mut out,
+                        machine_function,
+                    );
+                    emit_copy_or_move::<T>(rd, normalized, &mut out);
+                }
             }
             InstKind::Call { func, args } => {
                 let raw_callee_name = module.func(*func).name.clone();
@@ -952,6 +1097,11 @@ impl<T: LoweringTarget> Lowerer<T> {
 
                 let mut register_moves = Vec::new();
                 for (index, rs) in lowered_args.into_iter().enumerate() {
+                    let rs = if let Some(bits) = int_bits_for_value(module, args[index]) {
+                        emit_masked_value(rs, bits, &mut out, machine_function)
+                    } else {
+                        rs
+                    };
                     if index < T::num_arg_regs() {
                         register_moves.push(CopyMove {
                             dst: Register::Physical(T::arg_reg(index)),
@@ -973,10 +1123,15 @@ impl<T: LoweringTarget> Lowerer<T> {
 
                 if !module.value_ty(ValueId::Inst(instruction)).is_void() {
                     let rd_vreg = self.ensure_inst_vreg(instruction, machine_function, state);
-                    out.push(T::MachineInst::mv(
-                        Register::Virtual(rd_vreg),
-                        Register::Physical(T::return_reg()),
-                    ));
+                    let return_reg = Register::Physical(T::return_reg());
+                    let return_value = if let Some(bits) =
+                        int_bits_for_value(module, ValueId::Inst(instruction))
+                    {
+                        emit_masked_value(return_reg, bits, &mut out, machine_function)
+                    } else {
+                        return_reg
+                    };
+                    emit_copy_or_move::<T>(Register::Virtual(rd_vreg), return_value, &mut out);
                 }
             }
             InstKind::Branch { then_block, cond } => {
@@ -1241,7 +1396,7 @@ impl<T: LoweringTarget> Lowerer<T> {
             }
             InstKind::Ret { value } => {
                 if let Some(value) = value {
-                    let rs = lower_operand(
+                    let mut rs = lower_operand(
                         module,
                         *value,
                         &mut out,
@@ -1249,7 +1404,10 @@ impl<T: LoweringTarget> Lowerer<T> {
                         machine_function,
                         machine_module,
                     )?;
-                    out.push(T::MachineInst::mv(Register::Physical(T::return_reg()), rs));
+                    if let Some(bits) = int_bits_for_value(module, *value) {
+                        rs = emit_masked_value(rs, bits, &mut out, machine_function);
+                    }
+                    emit_copy_or_move::<T>(Register::Physical(T::return_reg()), rs, &mut out);
                 }
                 out.push(T::emit_ret());
             }
@@ -1300,7 +1458,7 @@ impl<T: LoweringTarget> Lowerer<T> {
                 }
             }
             InstKind::ICmp { op, lhs, rhs } => {
-                let rs1 = lower_operand(
+                let mut rs1 = lower_operand(
                     module,
                     *lhs,
                     &mut out,
@@ -1308,7 +1466,7 @@ impl<T: LoweringTarget> Lowerer<T> {
                     machine_function,
                     machine_module,
                 )?;
-                let rs2 = lower_operand(
+                let mut rs2 = lower_operand(
                     module,
                     *rhs,
                     &mut out,
@@ -1316,6 +1474,24 @@ impl<T: LoweringTarget> Lowerer<T> {
                     machine_function,
                     machine_module,
                 )?;
+                if let Some(bits) = int_bits_for_value(module, *lhs) {
+                    rs1 = emit_normalized_int_value(
+                        rs1,
+                        bits,
+                        icmp_operands_are_signed(op),
+                        &mut out,
+                        machine_function,
+                    );
+                }
+                if let Some(bits) = int_bits_for_value(module, *rhs) {
+                    rs2 = emit_normalized_int_value(
+                        rs2,
+                        bits,
+                        icmp_operands_are_signed(op),
+                        &mut out,
+                        machine_function,
+                    );
+                }
                 let rd_vreg = self.ensure_inst_vreg(instruction, machine_function, state);
                 let rd = Register::Virtual(rd_vreg);
                 emit_icmp(op, rd, rs1, rs2, &mut out, machine_function);
