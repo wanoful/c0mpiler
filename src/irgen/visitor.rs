@@ -1195,10 +1195,14 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
     ) -> Self::ExprRes<'_> {
         let right_value = self.visit_expr(right, extra)?;
         let core_right_value = self.core_branch_value(right);
-        let right_value_id = right_value.value;
+        let skip_second = matches!(&core_right_value, Some(c)
+            if c.value == right_value.value
+                && matches!(c.kind, CoreContainerKind::Raw { fat: None })
+                && matches!(right_value.kind, CoreContainerKind::Raw { fat: None }))
+            && lhs_is_side_effect_free(left);
         self.destructing_assign(left, extra, right_value)?;
         if let Some(core_right_value) = core_right_value
-            && core_right_value.value != right_value_id
+            && !skip_second
         {
             self.core_destructing_assign(left, extra, core_right_value)?;
         }
@@ -1657,5 +1661,27 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
         _extra: Self::PatExtra<'tmp>,
     ) -> Self::PatRes<'_> {
         impossible!()
+    }
+}
+
+fn lhs_is_side_effect_free(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Path(_) | ExprKind::Underscore(_) | ExprKind::Lit(_) => true,
+        ExprKind::Field(FieldExpr(inner, ..)) => lhs_is_side_effect_free(inner),
+        ExprKind::Index(IndexExpr(arr, idx)) => {
+            lhs_is_side_effect_free(arr) && lhs_is_side_effect_free(idx)
+        }
+        ExprKind::Unary(UnaryExpr(_, inner)) => lhs_is_side_effect_free(inner),
+        ExprKind::AddrOf(AddrOfExpr(_, inner)) => lhs_is_side_effect_free(inner),
+        ExprKind::Cast(CastExpr(inner, _)) => lhs_is_side_effect_free(inner),
+        ExprKind::Binary(BinaryExpr(_, l, r)) => {
+            lhs_is_side_effect_free(l) && lhs_is_side_effect_free(r)
+        }
+        ExprKind::Tup(TupExpr(items, _)) => items.iter().all(|e| lhs_is_side_effect_free(e)),
+        ExprKind::Array(ArrayExpr(items)) => items.iter().all(|e| lhs_is_side_effect_free(e)),
+        ExprKind::Struct(StructExpr { fields, .. }) => {
+            fields.iter().all(|f| lhs_is_side_effect_free(&f.expr))
+        }
+        _ => false,
     }
 }
