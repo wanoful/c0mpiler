@@ -1,7 +1,7 @@
 .PHONY: run
 
 run:
-	@cargo run -q -- --target rv64 --emit asm
+	@cargo run -q --release -- --target rv64 --emit asm
 
 build:
 	cargo build --release
