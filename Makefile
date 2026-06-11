@@ -1,4 +1,4 @@
 .PHONY: run
 
 run:
-	@cargo run -q -- --target rv64 --emit asm
+	@cargo run -q --offline -- --target rv64 --emit asm
