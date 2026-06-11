@@ -340,6 +340,40 @@ fn emit_normalized_int_value<T: LoweringTarget>(
     }
 }
 
+fn is_known_sign_extended_int_value<T: LoweringTarget>(
+    module: &ModuleCore,
+    value: ValueId,
+    bits: u8,
+) -> bool {
+    if bits >= (T::WORD_SIZE * 8) as u8 {
+        return true;
+    }
+    if T::WORD_SIZE != 8 || bits != 32 || int_bits_for_value(module, value) != Some(bits) {
+        return false;
+    }
+
+    matches!(
+        value,
+        ValueId::Inst(inst) if matches!(module.inst(inst).kind, InstKind::Load { .. } | InstKind::Sext { .. })
+    )
+}
+
+fn emit_normalized_int_operand<T: LoweringTarget>(
+    module: &ModuleCore,
+    value: ValueId,
+    src: Register<T::PhysicalReg>,
+    bits: u8,
+    signed: bool,
+    out: &mut Vec<T::MachineInst>,
+    machine_function: &mut MachineFunction<T>,
+) -> Register<T::PhysicalReg> {
+    if signed && is_known_sign_extended_int_value::<T>(module, value, bits) {
+        src
+    } else {
+        emit_normalized_int_value(src, bits, signed, out, machine_function)
+    }
+}
+
 fn emit_copy_or_move<T: LoweringTarget>(
     dst: Register<T::PhysicalReg>,
     src: Register<T::PhysicalReg>,
@@ -1004,7 +1038,9 @@ impl<T: LoweringTarget> Lowerer<T> {
                     machine_module,
                 )?;
                 if !has_32_bit_machine_result {
-                    rs1 = emit_normalized_int_value(
+                    rs1 = emit_normalized_int_operand(
+                        module,
+                        *lhs,
                         rs1,
                         operand_bits,
                         operands_signed,
@@ -1114,7 +1150,9 @@ impl<T: LoweringTarget> Lowerer<T> {
                 )?;
                 let rhs_bits = int_bits_for_value(module, *rhs).unwrap_or(operand_bits);
                 if !has_32_bit_machine_result {
-                    rs2 = emit_normalized_int_value(
+                    rs2 = emit_normalized_int_operand(
+                        module,
+                        *rhs,
                         rs2,
                         rhs_bits,
                         operands_signed,
@@ -1546,7 +1584,8 @@ impl<T: LoweringTarget> Lowerer<T> {
                         rs1,
                         0,
                         type_layout.layout.size as usize,
-                        type_layout.layout.size < (T::WORD_SIZE as u32),
+                        type_layout.layout.size < (T::WORD_SIZE as u32)
+                            && type_layout.layout.size != 4,
                     ));
                 }
             }
@@ -1631,7 +1670,9 @@ impl<T: LoweringTarget> Lowerer<T> {
                     machine_module,
                 )?;
                 if let Some(bits) = int_bits_for_value(module, *lhs) {
-                    rs1 = emit_normalized_int_value(
+                    rs1 = emit_normalized_int_operand(
+                        module,
+                        *lhs,
                         rs1,
                         bits,
                         icmp_operands_are_signed(op),
@@ -1640,7 +1681,9 @@ impl<T: LoweringTarget> Lowerer<T> {
                     );
                 }
                 if let Some(bits) = int_bits_for_value(module, *rhs) {
-                    rs2 = emit_normalized_int_value(
+                    rs2 = emit_normalized_int_operand(
+                        module,
+                        *rhs,
                         rs2,
                         bits,
                         icmp_operands_are_signed(op),
