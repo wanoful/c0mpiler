@@ -18,7 +18,7 @@ fn my_semantic() {
 }
 #[test]
 fn semantic_1() {
-    run_semantic("RCompiler-Testcases/semantic-1", &["misc3","misc4","misc14"]);
+    run_semantic("RCompiler-Testcases/semantic-1", &[]);
 }
 
 fn run_semantic(case_path: &str, escape_list: &[&str]) {
@@ -204,7 +204,7 @@ fn gen_ir_rv32(analyzer: &SemanticAnalyzer, krate: &Crate) -> Result<String, Str
 
 #[test]
 fn semantic_1_rv64() {
-    run_rv64_compile("RCompiler-Testcases/semantic-1", &["misc3","misc4","misc14"]);
+    run_rv64_compile("RCompiler-Testcases/semantic-1", &[]);
 }
 
 fn run_rv64_compile(case_path: &str, escape_list: &[&str]) {
