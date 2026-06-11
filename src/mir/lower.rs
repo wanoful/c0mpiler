@@ -395,6 +395,83 @@ fn icmp_operands_are_signed(icmp_code: &ICmpCode) -> bool {
     )
 }
 
+fn binary_op_has_32_bit_machine_result(op: &BinaryOpcode, bits: u8) -> bool {
+    bits == 32
+        && matches!(
+            op,
+            BinaryOpcode::Add
+                | BinaryOpcode::Sub
+                | BinaryOpcode::Mul
+                | BinaryOpcode::UDiv
+                | BinaryOpcode::SDiv
+                | BinaryOpcode::URem
+                | BinaryOpcode::SRem
+                | BinaryOpcode::Shl
+                | BinaryOpcode::LShr
+                | BinaryOpcode::AShr
+        )
+}
+
+fn const_int_u64(module: &ModuleCore, value: ValueId) -> Option<u64> {
+    if let ValueId::Const(constant) = value
+        && let ConstKind::Int(number) = &module.const_data(constant).kind
+    {
+        Some(number.as_u64())
+    } else {
+        None
+    }
+}
+
+fn is_false_const(module: &ModuleCore, value: ValueId) -> bool {
+    const_int_u64(module, value) == Some(0)
+}
+
+fn try_emit_inline_memcpy<T: LoweringTarget>(
+    raw_callee_name: &str,
+    args: &[ValueId],
+    out: &mut Vec<T::MachineInst>,
+    module: &ModuleCore,
+    machine_function: &mut MachineFunction<T>,
+    machine_module: &MachineModule<T>,
+    state: &FunctionLoweringState,
+) -> Result<bool, LowerError> {
+    if !raw_callee_name.starts_with("llvm.memcpy.") || args.len() < 4 {
+        return Ok(false);
+    }
+
+    let Some(size) = const_int_u64(module, args[2]) else {
+        return Ok(false);
+    };
+    if size > 32 || !is_false_const(module, args[3]) {
+        return Ok(false);
+    }
+
+    let dest = lower_operand(
+        module,
+        args[0],
+        out,
+        state,
+        machine_function,
+        machine_module,
+    )?;
+    let src = lower_operand(
+        module,
+        args[1],
+        out,
+        state,
+        machine_function,
+        machine_module,
+    )?;
+
+    for offset in 0..size {
+        let byte = Register::Virtual(machine_function.new_vreg());
+        out.push(T::emit_load_mem(byte, src, offset as i32, 1, true));
+        out.push(T::emit_store_mem(dest, byte, offset as i32, 1));
+    }
+
+    Ok(true)
+}
+
 fn emit_add_offset<T: LoweringTarget>(
     module: &ModuleCore,
     base: Register<T::PhysicalReg>,
@@ -908,6 +985,8 @@ impl<T: LoweringTarget> Lowerer<T> {
                 let operand_bits = int_bits_for_value(module, *lhs).unwrap_or(result_bits);
                 let operands_signed = binary_operands_are_signed(op);
                 let result_signed = binary_result_is_signed(op);
+                let has_32_bit_machine_result =
+                    binary_op_has_32_bit_machine_result(op, result_bits);
 
                 let mut rs1 = lower_operand(
                     module,
@@ -917,13 +996,15 @@ impl<T: LoweringTarget> Lowerer<T> {
                     machine_function,
                     machine_module,
                 )?;
-                rs1 = emit_normalized_int_value(
-                    rs1,
-                    operand_bits,
-                    operands_signed,
-                    &mut out,
-                    machine_function,
-                );
+                if !has_32_bit_machine_result {
+                    rs1 = emit_normalized_int_value(
+                        rs1,
+                        operand_bits,
+                        operands_signed,
+                        &mut out,
+                        machine_function,
+                    );
+                }
 
                 if let ValueId::Const(constant) = *rhs
                     && let ConstKind::Int(number) = &module.const_data(constant).kind
@@ -943,27 +1024,50 @@ impl<T: LoweringTarget> Lowerer<T> {
                     let rd = Register::Virtual(rd_vreg);
                     let imm = number.as_i64() as i32;
                     let shift_amt_limit = 1 << T::SHIFT_AMT_BITS;
-                    let raw_rd = if binary_result_needs_normalization(op) {
-                        Register::Virtual(machine_function.new_vreg())
-                    } else {
-                        rd
-                    };
+                    let raw_rd =
+                        if binary_result_needs_normalization(op) && !has_32_bit_machine_result {
+                            Register::Virtual(machine_function.new_vreg())
+                        } else {
+                            rd
+                        };
                     let lowered = match op {
                         BinaryOpcode::Add if (-2048..=2047).contains(&imm) => {
-                            Some(T::emit_addi(raw_rd, rs1, imm))
+                            if has_32_bit_machine_result {
+                                Some(T::emit_addiw(raw_rd, rs1, imm))
+                            } else {
+                                Some(T::emit_addi(raw_rd, rs1, imm))
+                            }
                         }
                         BinaryOpcode::Sub => imm
                             .checked_neg()
                             .filter(|neg_imm| (-2048..=2047).contains(neg_imm))
-                            .map(|neg_imm| T::emit_addi(raw_rd, rs1, neg_imm)),
+                            .map(|neg_imm| {
+                                if has_32_bit_machine_result {
+                                    T::emit_addiw(raw_rd, rs1, neg_imm)
+                                } else {
+                                    T::emit_addi(raw_rd, rs1, neg_imm)
+                                }
+                            }),
                         BinaryOpcode::Shl if (0..shift_amt_limit).contains(&(imm as usize)) => {
-                            Some(T::emit_slli(raw_rd, rs1, imm))
+                            if has_32_bit_machine_result {
+                                Some(T::emit_slliw(raw_rd, rs1, imm))
+                            } else {
+                                Some(T::emit_slli(raw_rd, rs1, imm))
+                            }
                         }
                         BinaryOpcode::LShr if (0..shift_amt_limit).contains(&(imm as usize)) => {
-                            Some(T::emit_srli(raw_rd, rs1, imm))
+                            if has_32_bit_machine_result {
+                                Some(T::emit_srliw(raw_rd, rs1, imm))
+                            } else {
+                                Some(T::emit_srli(raw_rd, rs1, imm))
+                            }
                         }
                         BinaryOpcode::AShr if (0..shift_amt_limit).contains(&(imm as usize)) => {
-                            Some(T::emit_srai(raw_rd, rs1, imm))
+                            if has_32_bit_machine_result {
+                                Some(T::emit_sraiw(raw_rd, rs1, imm))
+                            } else {
+                                Some(T::emit_srai(raw_rd, rs1, imm))
+                            }
                         }
                         BinaryOpcode::And if (-2048..=2047).contains(&imm) => {
                             Some(T::emit_andi(raw_rd, rs1, imm))
@@ -979,7 +1083,7 @@ impl<T: LoweringTarget> Lowerer<T> {
 
                     if let Some(lowered) = lowered {
                         out.push(lowered);
-                        if binary_result_needs_normalization(op) {
+                        if binary_result_needs_normalization(op) && !has_32_bit_machine_result {
                             let normalized = emit_normalized_int_value(
                                 raw_rd,
                                 result_bits,
@@ -1002,39 +1106,72 @@ impl<T: LoweringTarget> Lowerer<T> {
                     machine_module,
                 )?;
                 let rhs_bits = int_bits_for_value(module, *rhs).unwrap_or(operand_bits);
-                rs2 = emit_normalized_int_value(
-                    rs2,
-                    rhs_bits,
-                    operands_signed,
-                    &mut out,
-                    machine_function,
-                );
+                if !has_32_bit_machine_result {
+                    rs2 = emit_normalized_int_value(
+                        rs2,
+                        rhs_bits,
+                        operands_signed,
+                        &mut out,
+                        machine_function,
+                    );
+                }
                 let rd_vreg = self.ensure_inst_vreg(instruction, machine_function, state);
                 let rd = Register::Virtual(rd_vreg);
-                let raw_rd = if binary_result_needs_normalization(op) {
+                let raw_rd = if binary_result_needs_normalization(op) && !has_32_bit_machine_result
+                {
                     Register::Virtual(machine_function.new_vreg())
                 } else {
                     rd
                 };
 
                 let lowered = match op {
+                    BinaryOpcode::Add if has_32_bit_machine_result => {
+                        T::emit_addw(raw_rd, rs1, rs2)
+                    }
                     BinaryOpcode::Add => T::emit_add(raw_rd, rs1, rs2),
+                    BinaryOpcode::Sub if has_32_bit_machine_result => {
+                        T::emit_subw(raw_rd, rs1, rs2)
+                    }
                     BinaryOpcode::Sub => T::emit_sub(raw_rd, rs1, rs2),
+                    BinaryOpcode::Mul if has_32_bit_machine_result => {
+                        T::emit_mulw(raw_rd, rs1, rs2)
+                    }
                     BinaryOpcode::Mul => T::emit_mul(raw_rd, rs1, rs2),
+                    BinaryOpcode::UDiv if has_32_bit_machine_result => {
+                        T::emit_divuw(raw_rd, rs1, rs2)
+                    }
                     BinaryOpcode::UDiv => T::emit_divu(raw_rd, rs1, rs2),
+                    BinaryOpcode::SDiv if has_32_bit_machine_result => {
+                        T::emit_divw(raw_rd, rs1, rs2)
+                    }
                     BinaryOpcode::SDiv => T::emit_div(raw_rd, rs1, rs2),
+                    BinaryOpcode::URem if has_32_bit_machine_result => {
+                        T::emit_remuw(raw_rd, rs1, rs2)
+                    }
                     BinaryOpcode::URem => T::emit_remu(raw_rd, rs1, rs2),
+                    BinaryOpcode::SRem if has_32_bit_machine_result => {
+                        T::emit_remw(raw_rd, rs1, rs2)
+                    }
                     BinaryOpcode::SRem => T::emit_rem(raw_rd, rs1, rs2),
                     BinaryOpcode::And => T::emit_and(raw_rd, rs1, rs2),
                     BinaryOpcode::Or => T::emit_or(raw_rd, rs1, rs2),
                     BinaryOpcode::Xor => T::emit_xor(raw_rd, rs1, rs2),
+                    BinaryOpcode::Shl if has_32_bit_machine_result => {
+                        T::emit_sllw(raw_rd, rs1, rs2)
+                    }
                     BinaryOpcode::Shl => T::emit_sll(raw_rd, rs1, rs2),
+                    BinaryOpcode::LShr if has_32_bit_machine_result => {
+                        T::emit_srlw(raw_rd, rs1, rs2)
+                    }
                     BinaryOpcode::LShr => T::emit_srl(raw_rd, rs1, rs2),
+                    BinaryOpcode::AShr if has_32_bit_machine_result => {
+                        T::emit_sraw(raw_rd, rs1, rs2)
+                    }
                     BinaryOpcode::AShr => T::emit_sra(raw_rd, rs1, rs2),
                 };
 
                 out.push(lowered);
-                if binary_result_needs_normalization(op) {
+                if binary_result_needs_normalization(op) && !has_32_bit_machine_result {
                     let normalized = emit_normalized_int_value(
                         raw_rd,
                         result_bits,
@@ -1047,6 +1184,18 @@ impl<T: LoweringTarget> Lowerer<T> {
             }
             InstKind::Call { func, args } => {
                 let raw_callee_name = module.func(*func).name.clone();
+                if try_emit_inline_memcpy(
+                    &raw_callee_name,
+                    args,
+                    &mut out,
+                    module,
+                    machine_function,
+                    machine_module,
+                    state,
+                )? {
+                    return Ok(out);
+                }
+
                 let (callee_name, args) = if raw_callee_name.starts_with("llvm.memcpy.")
                     || raw_callee_name.starts_with("llvm.memmove.")
                 {

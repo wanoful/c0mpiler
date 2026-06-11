@@ -73,31 +73,45 @@ impl<'a> Display for RV64InstPrinter<'a> {
         match self.inst {
             Add { rd, rs1, rs2 }
             | Sub { rd, rs1, rs2 }
+            | Addw { rd, rs1, rs2 }
+            | Subw { rd, rs1, rs2 }
             | Xor { rd, rs1, rs2 }
             | Or { rd, rs1, rs2 }
             | And { rd, rs1, rs2 }
             | Sll { rd, rs1, rs2 }
             | Srl { rd, rs1, rs2 }
             | Sra { rd, rs1, rs2 }
+            | Sllw { rd, rs1, rs2 }
+            | Srlw { rd, rs1, rs2 }
+            | Sraw { rd, rs1, rs2 }
             | Slt { rd, rs1, rs2 }
             | Sltu { rd, rs1, rs2 }
             | Mul { rd, rs1, rs2 }
             | Mulh { rd, rs1, rs2 }
             | Mulsu { rd, rs1, rs2 }
             | Mulu { rd, rs1, rs2 }
+            | Mulw { rd, rs1, rs2 }
             | Div { rd, rs1, rs2 }
             | Divu { rd, rs1, rs2 }
             | Rem { rd, rs1, rs2 }
-            | Remu { rd, rs1, rs2 } => {
+            | Remu { rd, rs1, rs2 }
+            | Divw { rd, rs1, rs2 }
+            | Divuw { rd, rs1, rs2 }
+            | Remw { rd, rs1, rs2 }
+            | Remuw { rd, rs1, rs2 } => {
                 write!(f, "{} {}, {}, {}", self.inst.variant_name(), rd, rs1, rs2)
             }
             Addi { rd, rs1, imm }
+            | Addiw { rd, rs1, imm }
             | Xori { rd, rs1, imm }
             | Ori { rd, rs1, imm }
             | Andi { rd, rs1, imm }
             | Slli { rd, rs1, imm }
             | Srli { rd, rs1, imm }
             | Srai { rd, rs1, imm }
+            | Slliw { rd, rs1, imm }
+            | Srliw { rd, rs1, imm }
+            | Sraiw { rd, rs1, imm }
             | Slti { rd, rs1, imm }
             | Sltiu { rd, rs1, imm } => {
                 write!(f, "{} {}, {}, {}", self.inst.variant_name(), rd, rs1, imm)
