@@ -4,7 +4,7 @@ use crate::ir::{
     core::{FunctionId, InstRef, ModuleCore, ValueId},
     core_inst::{BinaryOpcode, ICmpCode, InstKind, PhiIncoming},
     core_int::CoreInt,
-    core_value::ConstKind,
+    core_value::{ConstKind, GlobalKind},
     ir_type::TypePtr,
 };
 
@@ -35,11 +35,7 @@ impl ModuleCore {
             if let Some(result) = self.try_simplify_inst(inst_ref) {
                 self.replace_all_uses_with(ValueId::Inst(inst_ref), result);
 
-                let users: Vec<_> = self
-                    .value_uses(result)
-                    .iter()
-                    .map(|u| u.user)
-                    .collect();
+                let users: Vec<_> = self.value_uses(result).iter().map(|u| u.user).collect();
                 work_list.extend(users);
 
                 if self.inst_has_no_uses_alg(inst_ref) {
@@ -63,32 +59,19 @@ impl ModuleCore {
         let ty = inst.ty.clone();
 
         match &kind {
-            InstKind::Binary { op, lhs, rhs } => {
-                self.try_simplify_binary(op, *lhs, *rhs, &ty)
-            }
-            InstKind::ICmp { op, lhs, rhs } => {
-                self.try_simplify_icmp(*op, *lhs, *rhs, &ty)
-            }
+            InstKind::Binary { op, lhs, rhs } => self.try_simplify_binary(op, *lhs, *rhs, &ty),
+            InstKind::ICmp { op, lhs, rhs } => self.try_simplify_icmp(*op, *lhs, *rhs, &ty),
             InstKind::Select {
                 cond,
                 then_val,
                 else_val,
             } => self.try_simplify_select(*cond, *then_val, *else_val),
-            InstKind::Phi { incomings, .. } => {
-                self.try_simplify_phi(incomings)
-            }
-            InstKind::Trunc { value } => {
-                self.try_fold_trunc(*value, &ty)
-            }
-            InstKind::Zext { value } => {
-                self.try_fold_zext(*value, &ty)
-            }
-            InstKind::Sext { value } => {
-                self.try_fold_sext(*value, &ty)
-            }
-            InstKind::PtrToInt { ptr } => {
-                self.try_fold_ptr_to_int(*ptr, &ty)
-            }
+            InstKind::Phi { incomings, .. } => self.try_simplify_phi(incomings),
+            InstKind::Load { ptr } => self.try_fold_const_global_load(*ptr, &ty),
+            InstKind::Trunc { value } => self.try_fold_trunc(*value, &ty),
+            InstKind::Zext { value } => self.try_fold_zext(*value, &ty),
+            InstKind::Sext { value } => self.try_fold_sext(*value, &ty),
+            InstKind::PtrToInt { ptr } => self.try_fold_ptr_to_int(*ptr, &ty),
             _ => None,
         }
     }
@@ -190,6 +173,31 @@ impl ModuleCore {
         None
     }
 
+    fn try_fold_const_global_load(&mut self, ptr: ValueId, ty: &TypePtr) -> Option<ValueId> {
+        let ValueId::Global(global) = ptr else {
+            return None;
+        };
+
+        let global_data = self.global(global);
+        let GlobalKind::GlobalVariable {
+            is_constant: true,
+            initializer: Some(initializer),
+        } = global_data.kind
+        else {
+            return None;
+        };
+
+        match &self.const_data(initializer).kind {
+            ConstKind::Int(value) if ty.as_int().is_some() => Some(ValueId::Const(
+                self.add_const(ty.clone(), ConstKind::Int(value.clone())),
+            )),
+            ConstKind::Null if ty.is_ptr() => {
+                Some(ValueId::Const(self.add_const(ty.clone(), ConstKind::Null)))
+            }
+            _ => None,
+        }
+    }
+
     fn try_simplify_icmp(
         &mut self,
         op: ICmpCode,
@@ -250,10 +258,7 @@ impl ModuleCore {
         None
     }
 
-    fn try_simplify_phi(
-        &self,
-        incomings: &HashMap<usize, PhiIncoming>,
-    ) -> Option<ValueId> {
+    fn try_simplify_phi(&self, incomings: &HashMap<usize, PhiIncoming>) -> Option<ValueId> {
         let mut values = incomings.values().map(|v| v.value);
         let first = values.next()?;
         for v in values {
@@ -350,7 +355,11 @@ impl ModuleCore {
             ValueId::Const(const_id) => match &self.const_data(const_id).kind {
                 ConstKind::Int(c) => {
                     if let Some(int_ty) = ty.as_int() {
-                        let mask = if int_ty.0 >= 64 { u64::MAX } else { (1u64 << int_ty.0) - 1 };
+                        let mask = if int_ty.0 >= 64 {
+                            u64::MAX
+                        } else {
+                            (1u64 << int_ty.0) - 1
+                        };
                         c.as_u64() & mask == mask
                     } else {
                         false
@@ -364,9 +373,10 @@ impl ModuleCore {
 
     fn make_zero_const(&mut self, ty: &TypePtr) -> Option<ValueId> {
         if let Some(int_ty) = ty.as_int() {
-            Some(ValueId::Const(
-                self.add_const(ty.clone(), ConstKind::Int(CoreInt::new(0, int_ty.0))),
-            ))
+            Some(ValueId::Const(self.add_const(
+                ty.clone(),
+                ConstKind::Int(CoreInt::new(0, int_ty.0)),
+            )))
         } else {
             None
         }
@@ -375,10 +385,15 @@ impl ModuleCore {
     fn make_all_ones_const(&mut self, ty: &TypePtr) -> Option<ValueId> {
         if let Some(int_ty) = ty.as_int() {
             let bits = int_ty.0;
-            let value = if bits >= 64 { u64::MAX } else { (1u64 << bits) - 1 };
-            Some(ValueId::Const(
-                self.add_const(ty.clone(), ConstKind::Int(CoreInt::new(value, bits))),
-            ))
+            let value = if bits >= 64 {
+                u64::MAX
+            } else {
+                (1u64 << bits) - 1
+            };
+            Some(ValueId::Const(self.add_const(
+                ty.clone(),
+                ConstKind::Int(CoreInt::new(value, bits)),
+            )))
         } else {
             None
         }
@@ -386,12 +401,10 @@ impl ModuleCore {
 
     fn make_bool_const(&mut self, value: bool, ty: &TypePtr) -> Option<ValueId> {
         if let Some(int_ty) = ty.as_int() {
-            Some(ValueId::Const(
-                self.add_const(
-                    ty.clone(),
-                    ConstKind::Int(CoreInt::new(if value { 1 } else { 0 }, int_ty.0)),
-                ),
-            ))
+            Some(ValueId::Const(self.add_const(
+                ty.clone(),
+                ConstKind::Int(CoreInt::new(if value { 1 } else { 0 }, int_ty.0)),
+            )))
         } else {
             None
         }
