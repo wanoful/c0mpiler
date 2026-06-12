@@ -1,0 +1,35 @@
+const N: usize = 128;
+const MOD: i32 = 1000003;
+
+fn main() {
+    let mut prev: [i32; N] = [0; N];
+    let mut cur: [i32; N] = [0; N];
+    let mut i: i32 = 0;
+    while (i < N as i32) {
+        prev[i as usize] = (i * 13 + 1) % MOD;
+        i += 1;
+    }
+
+    let mut row: i32 = 1;
+    while (row < 96) {
+        i = 1;
+        cur[0] = row;
+        while (i < N as i32) {
+            let a: i32 = prev[i as usize];
+            let b: i32 = prev[(i - 1) as usize];
+            let c: i32 = cur[(i - 1) as usize];
+            cur[i as usize] = (a + b * 2 + c / 2 + (row % 16)) % MOD;
+            i += 1;
+        }
+        i = 0;
+        while (i < N as i32) {
+            prev[i as usize] = cur[i as usize];
+            i += 1;
+        }
+        row += 1;
+    }
+
+    printlnInt(prev[127]);
+    printlnInt(prev[64]);
+    exit(0);
+}

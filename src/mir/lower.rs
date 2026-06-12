@@ -384,6 +384,207 @@ fn emit_copy_or_move<T: LoweringTarget>(
     }
 }
 
+fn emit_const_int<T: LoweringTarget>(
+    rd: Register<T::PhysicalReg>,
+    value: i32,
+    out: &mut Vec<T::MachineInst>,
+) {
+    if value == 0 {
+        emit_copy_or_move::<T>(rd, Register::Physical(T::zero_reg()), out);
+    } else {
+        out.push(T::MachineInst::load_imm(rd, value));
+    }
+}
+
+fn emit_mul_const<T: LoweringTarget>(
+    rd: Register<T::PhysicalReg>,
+    rs: Register<T::PhysicalReg>,
+    imm: i32,
+    result_bits: u8,
+    out: &mut Vec<T::MachineInst>,
+    machine_function: &mut MachineFunction<T>,
+) -> bool {
+    if imm == 0 {
+        emit_const_int::<T>(rd, 0, out);
+        return true;
+    }
+    if imm == 1 {
+        emit_copy_or_move::<T>(rd, rs, out);
+        return true;
+    }
+    if imm == -1 {
+        out.push(T::emit_sub(rd, Register::Physical(T::zero_reg()), rs));
+        return true;
+    }
+
+    let abs = imm.unsigned_abs();
+    if abs.is_power_of_two() {
+        let tmp = if imm < 0 {
+            Register::Virtual(machine_function.new_vreg())
+        } else {
+            rd
+        };
+        let shift = abs.trailing_zeros() as i32;
+        if result_bits == 32 && T::WORD_SIZE == 8 {
+            out.push(T::emit_slliw(tmp, rs, shift));
+        } else {
+            out.push(T::emit_slli(tmp, rs, shift));
+        }
+        if imm < 0 {
+            out.push(T::emit_sub(rd, Register::Physical(T::zero_reg()), tmp));
+        }
+        return true;
+    }
+
+    false
+}
+
+fn emit_udiv_const<T: LoweringTarget>(
+    rd: Register<T::PhysicalReg>,
+    rs: Register<T::PhysicalReg>,
+    imm: u32,
+    result_bits: u8,
+    out: &mut Vec<T::MachineInst>,
+) -> bool {
+    if imm == 0 {
+        return false;
+    }
+    if imm == 1 {
+        emit_copy_or_move::<T>(rd, rs, out);
+        return true;
+    }
+    if imm.is_power_of_two() {
+        let shift = imm.trailing_zeros() as i32;
+        if result_bits == 32 && T::WORD_SIZE == 8 {
+            out.push(T::emit_srliw(rd, rs, shift));
+        } else {
+            out.push(T::emit_srli(rd, rs, shift));
+        }
+        return true;
+    }
+    false
+}
+
+fn emit_urem_const<T: LoweringTarget>(
+    rd: Register<T::PhysicalReg>,
+    rs: Register<T::PhysicalReg>,
+    imm: u32,
+    out: &mut Vec<T::MachineInst>,
+    machine_function: &mut MachineFunction<T>,
+) -> bool {
+    if imm == 0 {
+        return false;
+    }
+    if imm == 1 {
+        emit_const_int::<T>(rd, 0, out);
+        return true;
+    }
+    if imm.is_power_of_two() {
+        let masked = emit_masked_value(rs, imm.trailing_zeros() as u8, out, machine_function);
+        emit_copy_or_move::<T>(rd, masked, out);
+        return true;
+    }
+    false
+}
+
+fn emit_sdiv_const<T: LoweringTarget>(
+    rd: Register<T::PhysicalReg>,
+    rs: Register<T::PhysicalReg>,
+    imm: i32,
+    result_bits: u8,
+    out: &mut Vec<T::MachineInst>,
+    machine_function: &mut MachineFunction<T>,
+) -> bool {
+    if imm == 0 || imm == i32::MIN {
+        return false;
+    }
+    if imm == 1 {
+        emit_copy_or_move::<T>(rd, rs, out);
+        return true;
+    }
+    if imm == -1 {
+        out.push(T::emit_sub(rd, Register::Physical(T::zero_reg()), rs));
+        return true;
+    }
+
+    let abs = imm.unsigned_abs();
+    if abs.is_power_of_two() {
+        let shift = abs.trailing_zeros() as i32;
+        let sign = Register::Virtual(machine_function.new_vreg());
+        let biased = Register::Virtual(machine_function.new_vreg());
+        if result_bits == 32 && T::WORD_SIZE == 8 {
+            out.push(T::emit_sraiw(sign, rs, 31));
+        } else {
+            out.push(T::emit_srai(sign, rs, (result_bits - 1) as i32));
+        }
+        out.push(T::emit_srli(sign, sign, (T::WORD_SIZE * 8) as i32 - shift));
+        out.push(T::emit_add(biased, rs, sign));
+
+        let quotient = if imm < 0 {
+            Register::Virtual(machine_function.new_vreg())
+        } else {
+            rd
+        };
+        if result_bits == 32 && T::WORD_SIZE == 8 {
+            out.push(T::emit_sraiw(quotient, biased, shift));
+        } else {
+            out.push(T::emit_srai(quotient, biased, shift));
+        }
+        if imm < 0 {
+            out.push(T::emit_sub(rd, Register::Physical(T::zero_reg()), quotient));
+        }
+        return true;
+    }
+
+    false
+}
+
+fn emit_srem_const<T: LoweringTarget>(
+    rd: Register<T::PhysicalReg>,
+    rs: Register<T::PhysicalReg>,
+    imm: i32,
+    result_bits: u8,
+    out: &mut Vec<T::MachineInst>,
+    machine_function: &mut MachineFunction<T>,
+) -> bool {
+    if imm == 0 || imm == i32::MIN {
+        return false;
+    }
+    let abs = imm.unsigned_abs();
+    if abs == 1 {
+        emit_const_int::<T>(rd, 0, out);
+        return true;
+    }
+    if abs.is_power_of_two() {
+        let quotient = Register::Virtual(machine_function.new_vreg());
+        if !emit_sdiv_const::<T>(quotient, rs, imm, result_bits, out, machine_function) {
+            return false;
+        }
+        let product = Register::Virtual(machine_function.new_vreg());
+        let mul_imm = imm;
+        if !emit_mul_const::<T>(
+            product,
+            quotient,
+            mul_imm,
+            result_bits,
+            out,
+            machine_function,
+        ) {
+            let imm_reg = Register::Virtual(machine_function.new_vreg());
+            out.push(T::MachineInst::load_imm(imm_reg, mul_imm));
+            if result_bits == 32 && T::WORD_SIZE == 8 {
+                out.push(T::emit_mulw(product, quotient, imm_reg));
+            } else {
+                out.push(T::emit_mul(product, quotient, imm_reg));
+            }
+        }
+        out.push(T::emit_sub(rd, rs, product));
+        return true;
+    }
+
+    false
+}
+
 fn binary_operands_are_signed(op: &BinaryOpcode) -> bool {
     matches!(
         op,
@@ -1058,6 +1259,11 @@ impl<T: LoweringTarget> Lowerer<T> {
                         op,
                         BinaryOpcode::Add
                             | BinaryOpcode::Sub
+                            | BinaryOpcode::Mul
+                            | BinaryOpcode::UDiv
+                            | BinaryOpcode::SDiv
+                            | BinaryOpcode::URem
+                            | BinaryOpcode::SRem
                             | BinaryOpcode::Shl
                             | BinaryOpcode::LShr
                             | BinaryOpcode::AShr
@@ -1094,6 +1300,99 @@ impl<T: LoweringTarget> Lowerer<T> {
                                     T::emit_addi(raw_rd, rs1, neg_imm)
                                 }
                             }),
+                        BinaryOpcode::Mul => {
+                            if emit_mul_const::<T>(
+                                raw_rd,
+                                rs1,
+                                imm,
+                                result_bits,
+                                &mut out,
+                                machine_function,
+                            ) {
+                                None
+                            } else {
+                                let imm_reg = Register::Virtual(machine_function.new_vreg());
+                                out.push(T::MachineInst::load_imm(imm_reg, imm));
+                                Some(if has_32_bit_machine_result {
+                                    T::emit_mulw(raw_rd, rs1, imm_reg)
+                                } else {
+                                    T::emit_mul(raw_rd, rs1, imm_reg)
+                                })
+                            }
+                        }
+                        BinaryOpcode::UDiv => {
+                            if emit_udiv_const::<T>(raw_rd, rs1, imm as u32, result_bits, &mut out)
+                            {
+                                None
+                            } else {
+                                let imm_reg = Register::Virtual(machine_function.new_vreg());
+                                out.push(T::MachineInst::load_imm(imm_reg, imm));
+                                Some(if has_32_bit_machine_result {
+                                    T::emit_divuw(raw_rd, rs1, imm_reg)
+                                } else {
+                                    T::emit_divu(raw_rd, rs1, imm_reg)
+                                })
+                            }
+                        }
+                        BinaryOpcode::SDiv => {
+                            if emit_sdiv_const::<T>(
+                                raw_rd,
+                                rs1,
+                                imm,
+                                result_bits,
+                                &mut out,
+                                machine_function,
+                            ) {
+                                None
+                            } else {
+                                let imm_reg = Register::Virtual(machine_function.new_vreg());
+                                out.push(T::MachineInst::load_imm(imm_reg, imm));
+                                Some(if has_32_bit_machine_result {
+                                    T::emit_divw(raw_rd, rs1, imm_reg)
+                                } else {
+                                    T::emit_div(raw_rd, rs1, imm_reg)
+                                })
+                            }
+                        }
+                        BinaryOpcode::URem => {
+                            if emit_urem_const::<T>(
+                                raw_rd,
+                                rs1,
+                                imm as u32,
+                                &mut out,
+                                machine_function,
+                            ) {
+                                None
+                            } else {
+                                let imm_reg = Register::Virtual(machine_function.new_vreg());
+                                out.push(T::MachineInst::load_imm(imm_reg, imm));
+                                Some(if has_32_bit_machine_result {
+                                    T::emit_remuw(raw_rd, rs1, imm_reg)
+                                } else {
+                                    T::emit_remu(raw_rd, rs1, imm_reg)
+                                })
+                            }
+                        }
+                        BinaryOpcode::SRem => {
+                            if emit_srem_const::<T>(
+                                raw_rd,
+                                rs1,
+                                imm,
+                                result_bits,
+                                &mut out,
+                                machine_function,
+                            ) {
+                                None
+                            } else {
+                                let imm_reg = Register::Virtual(machine_function.new_vreg());
+                                out.push(T::MachineInst::load_imm(imm_reg, imm));
+                                Some(if has_32_bit_machine_result {
+                                    T::emit_remw(raw_rd, rs1, imm_reg)
+                                } else {
+                                    T::emit_rem(raw_rd, rs1, imm_reg)
+                                })
+                            }
+                        }
                         BinaryOpcode::Shl if (0..shift_amt_limit).contains(&(imm as usize)) => {
                             if has_32_bit_machine_result {
                                 Some(T::emit_slliw(raw_rd, rs1, imm))
@@ -1127,8 +1426,19 @@ impl<T: LoweringTarget> Lowerer<T> {
                         _ => None,
                     };
 
+                    let did_lower = lowered.is_some()
+                        || matches!(
+                            op,
+                            BinaryOpcode::Mul
+                                | BinaryOpcode::UDiv
+                                | BinaryOpcode::SDiv
+                                | BinaryOpcode::URem
+                                | BinaryOpcode::SRem
+                        );
                     if let Some(lowered) = lowered {
                         out.push(lowered);
+                    }
+                    if did_lower {
                         if binary_result_needs_normalization(op) && !has_32_bit_machine_result {
                             let normalized = emit_normalized_int_value(
                                 raw_rd,
@@ -1489,8 +1799,7 @@ impl<T: LoweringTarget> Lowerer<T> {
                                 if field_layout.offset == 0 {
                                     // base unchanged
                                 } else if field_layout.offset <= 2047 {
-                                    let temp_reg =
-                                        Register::Virtual(machine_function.new_vreg());
+                                    let temp_reg = Register::Virtual(machine_function.new_vreg());
                                     out.push(T::emit_addi(
                                         temp_reg,
                                         base,
@@ -1503,8 +1812,7 @@ impl<T: LoweringTarget> Lowerer<T> {
                                         imm_reg,
                                         field_layout.offset as i32,
                                     ));
-                                    let temp_reg =
-                                        Register::Virtual(machine_function.new_vreg());
+                                    let temp_reg = Register::Virtual(machine_function.new_vreg());
                                     out.push(T::emit_add(temp_reg, base, imm_reg));
                                     base = temp_reg;
                                 }

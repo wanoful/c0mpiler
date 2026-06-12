@@ -1,0 +1,27 @@
+const N: usize = 1536;
+
+fn main() {
+    let mut a: [i32; N] = [0; N];
+    let mut b: [i32; N] = [0; N];
+    let mut i: i32 = 0;
+    while (i < N as i32) {
+        a[i as usize] = (i * 7 + 3) % 4096;
+        b[i as usize] = (i * i + 11) % 8192;
+        i += 1;
+    }
+
+    let mut sum: i32 = 0;
+    i = 1;
+    while (i < (N as i32) - 1) {
+        let left: i32 = a[(i - 1) as usize];
+        let mid: i32 = a[i as usize];
+        let right: i32 = a[(i + 1) as usize];
+        let value: i32 = ((left + right) / 2) + (mid * 4) - (b[(i % 512) as usize] % 16);
+        b[i as usize] = value;
+        sum = (sum + value) % 10000019;
+        i += 1;
+    }
+    printlnInt(sum);
+    printlnInt(b[1024]);
+    exit(0);
+}

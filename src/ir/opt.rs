@@ -1,8 +1,9 @@
 pub mod algebraic;
 pub mod cfg_simpilfy;
 pub mod dce;
+pub mod function_inline;
 pub mod licm;
 pub mod mem2reg;
 pub mod merge_return;
+pub mod scalar_memcpy;
 pub mod sccp;
-pub mod function_inline;

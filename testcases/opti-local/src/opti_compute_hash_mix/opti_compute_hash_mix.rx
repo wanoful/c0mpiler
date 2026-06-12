@@ -1,0 +1,29 @@
+const N: usize = 2048;
+
+fn mix_round(x: i32, salt: i32) -> i32 {
+    let mut y: i32 = x + salt * 4;
+    y = y ^ (y << 5);
+    y = y + (y >> 3);
+    y = y ^ ((salt * 8) + (x / 2));
+    y = y + ((x % 1024) * 2);
+    y
+}
+
+fn main() {
+    let mut values: [i32; N] = [0; N];
+    let mut i: i32 = 0;
+    while (i < N as i32) {
+        values[i as usize] = (i * 110351 + 12345) ^ (i << 7);
+        i += 1;
+    }
+
+    let mut hash: i32 = 17;
+    i = 0;
+    while (i < N as i32) {
+        hash = mix_round(hash + values[i as usize], i);
+        hash = hash ^ values[(i % 1024) as usize];
+        i += 1;
+    }
+    printlnInt(hash);
+    exit(0);
+}

@@ -1,0 +1,13 @@
+fn main() {
+    let a: i32 = -33;
+    let b: i32 = 33;
+    printlnInt(a / 8);
+    printlnInt(a % 8);
+    printlnInt(a / -8);
+    printlnInt(a % -8);
+    printlnInt(b / 8);
+    printlnInt(b % 8);
+    printlnInt(b / -8);
+    printlnInt(b % -8);
+    exit(0);
+}
