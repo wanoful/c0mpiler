@@ -5,5 +5,6 @@ pub mod function_inline;
 pub mod licm;
 pub mod mem2reg;
 pub mod merge_return;
+pub mod local_memory;
 pub mod scalar_memcpy;
 pub mod sccp;

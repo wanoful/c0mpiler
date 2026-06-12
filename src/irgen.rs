@@ -424,11 +424,16 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         self.module.borrow_mut().opt_scalar_memcpy();
     }
 
+    pub fn opt_local_memory(&mut self) {
+        self.module.borrow_mut().opt_local_memory();
+    }
+
     pub fn opt_all(&mut self) {
         self.opt_merge_return();
         self.opt_scalar_memcpy();
         self.opt_mem2reg();
         self.opt_algebraic_simplification();
+        self.opt_local_memory();
         self.opt_sccp();
         self.opt_cfg_simplify();
         self.opt_adce();
@@ -438,6 +443,7 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         self.opt_scalar_memcpy();
         self.opt_mem2reg();
         self.opt_algebraic_simplification();
+        self.opt_local_memory();
         self.opt_sccp();
         self.opt_cfg_simplify();
         self.opt_licm();
