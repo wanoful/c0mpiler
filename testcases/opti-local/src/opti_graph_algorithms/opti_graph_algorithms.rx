@@ -1,0 +1,102 @@
+const N: usize = 200;
+const M: usize = 1024;
+const INF: i32 = 1000000000;
+
+struct Graph {
+    n: i32,
+    head: [i32; N],
+    next: [i32; M],
+    to: [i32; M],
+    w: [i32; M],
+    cnt: i32,
+}
+
+fn add_edge(g: &mut Graph, u: i32, v: i32, weight: i32) {
+    g.next[g.cnt as usize] = g.head[u as usize];
+    g.to[g.cnt as usize] = v;
+    g.w[g.cnt as usize] = weight;
+    g.head[u as usize] = g.cnt;
+    g.cnt += 1;
+}
+
+fn dijkstra(g: &mut Graph, src: i32, dist: &mut [i32; N], visited: &mut [i32; N]) {
+    let mut i: i32 = 0;
+    while (i < g.n) {
+        dist[i as usize] = INF;
+        visited[i as usize] = 0;
+        i += 1;
+    }
+    dist[src as usize] = 0;
+
+    let mut iter: i32 = 0;
+    while (iter < g.n) {
+        let mut u: i32 = -1;
+        let mut best: i32 = INF;
+        i = 0;
+        while (i < g.n) {
+            if (visited[i as usize] == 0 && dist[i as usize] < best) {
+                best = dist[i as usize];
+                u = i;
+            }
+            i += 1;
+        }
+        if (u < 0) {
+            iter = g.n;
+        } else {
+            visited[u as usize] = 1;
+            let mut e: i32 = g.head[u as usize];
+            while (e >= 0) {
+                let v: i32 = g.to[e as usize];
+                let nd: i32 = dist[u as usize] + g.w[e as usize];
+                if (nd < dist[v as usize]) {
+                    dist[v as usize] = nd;
+                }
+                e = g.next[e as usize];
+            }
+            iter += 1;
+        }
+    }
+}
+
+fn main() {
+    let mut g: Graph = Graph {
+        n: 0,
+        head: [-1; N],
+        next: [0; M],
+        to: [0; M],
+        w: [0; M],
+        cnt: 0,
+    };
+    g.n = N as i32;
+
+    let mut i: i32 = 0;
+    while (i < g.n) {
+        let mut j: i32 = 1;
+        while (j <= 4) {
+            let v: i32 = (i + j * 7 + 13) % g.n;
+            let weight: i32 = ((i * 31 + j * 17 + 5) % 100) + 1;
+            add_edge(&mut g, i, v, weight);
+            j += 1;
+        }
+        i += 1;
+    }
+
+    let mut dist: [i32; N] = [0; N];
+    let mut visited: [i32; N] = [0; N];
+
+    let mut total: i32 = 0;
+    let mut s: i32 = 0;
+    while (s < 20) {
+        dijkstra(&mut g, s, &mut dist, &mut visited);
+        let mut k: i32 = 0;
+        while (k < g.n) {
+            if (dist[k as usize] < INF) {
+                total = (total + dist[k as usize]) % 1000003;
+            }
+            k += 1;
+        }
+        s += 1;
+    }
+    printlnInt(total);
+    exit(0);
+}

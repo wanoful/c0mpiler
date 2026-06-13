@@ -144,7 +144,7 @@ impl ModuleCore {
                         continue;
                     }
 
-                    if self.is_loop_invariant(inst_ref, loop_info) {
+                    if self.is_loop_invariant(func_id, inst_ref, loop_info) {
                         let inst = self.inst(inst_ref);
                         if inst.kind.is_phi() || inst.kind.is_terminator() {
                             continue;
@@ -164,11 +164,28 @@ impl ModuleCore {
         }
     }
 
-    fn is_loop_invariant(&self, inst_ref: InstRef, loop_info: &LoopInfo) -> bool {
+    fn is_loop_invariant(&self, func_id: FunctionId, inst_ref: InstRef, loop_info: &LoopInfo) -> bool {
         let inst = self.inst(inst_ref);
 
         match &inst.kind {
-            InstKind::Binary { .. } | InstKind::ICmp { .. } => {}
+            InstKind::Binary { .. }
+            | InstKind::ICmp { .. }
+            | InstKind::GetElementPtr { .. }
+            | InstKind::Zext { .. }
+            | InstKind::Sext { .. }
+            | InstKind::Trunc { .. }
+            | InstKind::PtrToInt { .. }
+            | InstKind::Select { .. } => {}
+            InstKind::Load { ptr } => {
+                let parent_block = inst.parent.unwrap();
+                if !loop_info.blocks.contains(&parent_block.block) {
+                    return true;
+                }
+                if !self.is_value_invariant(*ptr, loop_info) {
+                    return false;
+                }
+                return self.is_load_safe_to_hoist(func_id, *ptr, loop_info);
+            }
             _ => return false,
         }
 
@@ -184,6 +201,107 @@ impl ModuleCore {
             }
         });
         all_invariant
+    }
+
+    fn is_load_safe_to_hoist(&self, func_id: FunctionId, load_ptr: ValueId, loop_info: &LoopInfo) -> bool {
+        for &block_id in loop_info.blocks.iter() {
+            let block_ref = BlockRef {
+                func: func_id,
+                block: block_id,
+            };
+            for inst_ref in self.insts_in_order(block_ref) {
+                let kind = self.inst(inst_ref).kind.clone();
+                match kind {
+                    InstKind::Store { ptr, .. } => {
+                        if self.licm_ptr_may_alias(ptr, load_ptr) {
+                            return false;
+                        }
+                    }
+                    InstKind::Call { .. } => return false,
+                    _ => {}
+                }
+            }
+        }
+        true
+    }
+
+    fn licm_ptr_may_alias(&self, lhs: ValueId, rhs: ValueId) -> bool {
+        if lhs == rhs {
+            return true;
+        }
+
+        let Some((lhs_root, lhs_path)) = self.licm_ptr_path(lhs) else {
+            return true;
+        };
+        let Some((rhs_root, rhs_path)) = self.licm_ptr_path(rhs) else {
+            return true;
+        };
+        if lhs_root != rhs_root {
+            // Different roots: only safe if both are distinct allocas/args/globals.
+            return !self.roots_known_distinct(lhs_root, rhs_root);
+        }
+
+        for (lhs_index, rhs_index) in lhs_path.iter().zip(rhs_path.iter()) {
+            if lhs_index == rhs_index {
+                continue;
+            }
+            if self.licm_const_indices_equal(*lhs_index, *rhs_index) {
+                continue;
+            }
+            if self.licm_const_indices_known_distinct(*lhs_index, *rhs_index) {
+                return false;
+            }
+            return true;
+        }
+        true
+    }
+
+    fn licm_ptr_path(&self, ptr: ValueId) -> Option<(ValueId, Vec<ValueId>)> {
+        let ValueId::Inst(inst_ref) = ptr else {
+            return Some((ptr, Vec::new()));
+        };
+        let InstKind::GetElementPtr { base, indices, .. } = &self.inst(inst_ref).kind else {
+            return Some((ptr, Vec::new()));
+        };
+
+        let (root, mut path) = self.licm_ptr_path(*base)?;
+        path.extend(indices.iter().copied());
+        Some((root, path))
+    }
+
+    fn roots_known_distinct(&self, lhs: ValueId, rhs: ValueId) -> bool {
+        // Two distinct allocas / args / globals are guaranteed not to alias.
+        let is_root = |v: ValueId| matches!(v, ValueId::Arg(..) | ValueId::Global(..))
+            || matches!(v, ValueId::Inst(i) if matches!(self.inst(i).kind, InstKind::Alloca { .. }));
+        is_root(lhs) && is_root(rhs)
+    }
+
+    fn licm_const_indices_known_distinct(&self, lhs: ValueId, rhs: ValueId) -> bool {
+        let (ValueId::Const(lhs), ValueId::Const(rhs)) = (lhs, rhs) else {
+            return false;
+        };
+        use crate::ir::core_value::ConstKind;
+        let ConstKind::Int(lhs) = &self.const_data(lhs).kind else {
+            return false;
+        };
+        let ConstKind::Int(rhs) = &self.const_data(rhs).kind else {
+            return false;
+        };
+        lhs != rhs
+    }
+
+    fn licm_const_indices_equal(&self, lhs: ValueId, rhs: ValueId) -> bool {
+        let (ValueId::Const(lhs), ValueId::Const(rhs)) = (lhs, rhs) else {
+            return false;
+        };
+        use crate::ir::core_value::ConstKind;
+        let ConstKind::Int(lhs) = &self.const_data(lhs).kind else {
+            return false;
+        };
+        let ConstKind::Int(rhs) = &self.const_data(rhs).kind else {
+            return false;
+        };
+        lhs == rhs
     }
 
     fn is_value_invariant(&self, value: ValueId, loop_info: &LoopInfo) -> bool {
