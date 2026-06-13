@@ -23,6 +23,8 @@ macro_rules! fault {
 fn my_ir() { run_rv32_mir("testcases/IR", &[]); }
 #[test]
 fn ir_1_asm() { run_rv32_mir("RCompiler-Testcases/IR-1", &[]); }
+#[test]
+fn opti_local_asm() { run_rv32_mir("testcases/opti-local", &[]); }
 
 fn run_rv32_mir(case_path: &str, escape_list: &[&str]) {
     let reimu_path = std::env::var("REIMU_PATH")
@@ -98,6 +100,8 @@ fn gen_rv32_mir(analyzer: &SemanticAnalyzer, krate: &c0mpiler::ast::Crate) -> Re
 fn my_rv64_ir() { run_rv64_qemu("testcases/IR", &[]); }
 #[test]
 fn ir_1_rv64_asm() { run_rv64_qemu("RCompiler-Testcases/IR-1", &[]); }
+#[test]
+fn opti_local_rv64_asm() { run_rv64_qemu("testcases/opti-local", &[]); }
 
 fn run_rv64_qemu(case_path: &str, escape_list: &[&str]) {
     let qemu_path = std::env::var("QEMU_RV64_PATH")

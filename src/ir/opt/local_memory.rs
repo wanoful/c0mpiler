@@ -8,10 +8,16 @@ use crate::ir::{
 };
 
 #[derive(Clone, PartialEq, Eq, Hash)]
+enum CanonIndex {
+    Const(u8, u64),
+    Value(ValueId),
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
 struct GepKey {
     base_ty: TypePtr,
-    base: ValueId,
-    indices: Vec<ValueId>,
+    base: CanonIndex,
+    indices: Vec<CanonIndex>,
 }
 
 impl ModuleCore {
@@ -46,8 +52,8 @@ impl ModuleCore {
             {
                 let key = GepKey {
                     base_ty,
-                    base,
-                    indices,
+                    base: self.canon_index(base),
+                    indices: indices.iter().map(|v| self.canon_index(*v)).collect(),
                 };
                 if let Some(&prev) = seen.get(&key) {
                     self.replace_all_uses_with(ValueId::Inst(inst_ref), prev);
@@ -63,6 +69,15 @@ impl ModuleCore {
                 self.erase_inst_from_parent(inst_ref);
             }
         }
+    }
+
+    fn canon_index(&self, value: ValueId) -> CanonIndex {
+        if let ValueId::Const(const_id) = value
+            && let ConstKind::Int(ci) = &self.const_data(const_id).kind
+        {
+            return CanonIndex::Const(ci.bit_width, ci.value);
+        }
+        CanonIndex::Value(value)
     }
 
     fn local_forward_memory(&mut self, block: BlockRef) {
@@ -165,6 +180,9 @@ impl ModuleCore {
             if lhs_index == rhs_index {
                 continue;
             }
+            if self.const_indices_equal(*lhs_index, *rhs_index) {
+                continue;
+            }
             if self.const_indices_known_distinct(*lhs_index, *rhs_index) {
                 return false;
             }
@@ -198,5 +216,18 @@ impl ModuleCore {
             return false;
         };
         lhs != rhs
+    }
+
+    fn const_indices_equal(&self, lhs: ValueId, rhs: ValueId) -> bool {
+        let (ValueId::Const(lhs), ValueId::Const(rhs)) = (lhs, rhs) else {
+            return false;
+        };
+        let ConstKind::Int(lhs) = &self.const_data(lhs).kind else {
+            return false;
+        };
+        let ConstKind::Int(rhs) = &self.const_data(rhs).kind else {
+            return false;
+        };
+        lhs == rhs
     }
 }

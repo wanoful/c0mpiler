@@ -345,17 +345,50 @@ fn is_known_sign_extended_int_value<T: LoweringTarget>(
     value: ValueId,
     bits: u8,
 ) -> bool {
+    is_known_sign_extended_int_value_depth::<T>(module, value, bits, 4)
+}
+
+fn is_known_sign_extended_int_value_depth<T: LoweringTarget>(
+    module: &ModuleCore,
+    value: ValueId,
+    bits: u8,
+    depth: u32,
+) -> bool {
     if bits >= (T::WORD_SIZE * 8) as u8 {
         return true;
     }
     if T::WORD_SIZE != 8 || bits != 32 || int_bits_for_value(module, value) != Some(bits) {
         return false;
     }
+    if depth == 0 {
+        return false;
+    }
 
-    matches!(
-        value,
-        ValueId::Inst(inst) if matches!(module.inst(inst).kind, InstKind::Load { .. } | InstKind::Sext { .. })
-    )
+    match value {
+        ValueId::Const(_) => true,
+        ValueId::Arg(_) => true,
+        ValueId::Global(_) => false,
+        ValueId::Inst(inst) => match &module.inst(inst).kind {
+            InstKind::Load { .. } | InstKind::Sext { .. } | InstKind::Call { .. } => true,
+            InstKind::Binary { op, .. } => matches!(
+                op,
+                BinaryOpcode::Add
+                    | BinaryOpcode::Sub
+                    | BinaryOpcode::Mul
+                    | BinaryOpcode::SDiv
+                    | BinaryOpcode::SRem
+                    | BinaryOpcode::UDiv
+                    | BinaryOpcode::URem
+                    | BinaryOpcode::Shl
+                    | BinaryOpcode::AShr
+                    | BinaryOpcode::LShr
+            ),
+            InstKind::Phi { incomings, .. } => incomings.values().all(|inc| {
+                is_known_sign_extended_int_value_depth::<T>(module, inc.value, bits, depth - 1)
+            }),
+            _ => false,
+        },
+    }
 }
 
 fn emit_normalized_int_operand<T: LoweringTarget>(
@@ -748,8 +781,42 @@ fn emit_add_offset<T: LoweringTarget>(
         return Ok(base);
     }
 
-    let index_reg = lower_operand(module, index, out, state, machine_function, machine_module)?;
+    // On RV64, GEP indices commonly come from `zext i32 X to i64` where X is
+    // known sign-extended. The default lowering emits zext (two shifts) then a
+    // separate `slli` for the stride. We can fuse them: `slli rd, X, 32;
+    // srli rd, rd, 32 - shift` performs the zero-extension and multiplication
+    // by `stride` in two instructions instead of three.
     let temp_reg = Register::Virtual(machine_function.new_vreg());
+    if stride.is_power_of_two() && T::WORD_SIZE == 8 {
+        let shift = stride.trailing_zeros() as i32;
+        if shift > 0 && shift <= 32 {
+            let zext_src = if let ValueId::Inst(inst_ref) = index
+                && let InstKind::Zext { value } = module.inst(inst_ref).kind.clone()
+                && int_bits_for_value(module, value) == Some(32)
+            {
+                Some(value)
+            } else {
+                None
+            };
+            if let Some(value) = zext_src {
+                let src_reg = lower_operand(
+                    module,
+                    value,
+                    out,
+                    state,
+                    machine_function,
+                    machine_module,
+                )?;
+                out.push(T::emit_slli(temp_reg, src_reg, 32));
+                out.push(T::emit_srli(temp_reg, temp_reg, 32 - shift));
+                let result_reg = Register::Virtual(machine_function.new_vreg());
+                out.push(T::emit_add(result_reg, base, temp_reg));
+                return Ok(result_reg);
+            }
+        }
+    }
+
+    let index_reg = lower_operand(module, index, out, state, machine_function, machine_module)?;
     if stride.is_power_of_two() {
         out.push(T::emit_slli(
             temp_reg,
@@ -774,16 +841,30 @@ fn emit_icmp<T: LoweringTarget>(
     out: &mut Vec<T::MachineInst>,
     machine_function: &mut MachineFunction<T>,
 ) {
+    let rs1_is_zero = matches!(rs1, Register::Physical(p) if p == T::zero_reg());
+    let rs2_is_zero = matches!(rs2, Register::Physical(p) if p == T::zero_reg());
     match icmp_code {
         ICmpCode::Eq => {
-            let tmp = Register::Virtual(machine_function.new_vreg());
-            out.push(T::emit_xor(tmp, rs1, rs2));
-            out.push(T::emit_sltiu(rd, tmp, 1));
+            if rs1_is_zero {
+                out.push(T::emit_sltiu(rd, rs2, 1));
+            } else if rs2_is_zero {
+                out.push(T::emit_sltiu(rd, rs1, 1));
+            } else {
+                let tmp = Register::Virtual(machine_function.new_vreg());
+                out.push(T::emit_xor(tmp, rs1, rs2));
+                out.push(T::emit_sltiu(rd, tmp, 1));
+            }
         }
         ICmpCode::Ne => {
-            let tmp = Register::Virtual(machine_function.new_vreg());
-            out.push(T::emit_xor(tmp, rs1, rs2));
-            out.push(T::emit_sltu(rd, Register::Physical(T::zero_reg()), tmp));
+            if rs1_is_zero {
+                out.push(T::emit_sltu(rd, Register::Physical(T::zero_reg()), rs2));
+            } else if rs2_is_zero {
+                out.push(T::emit_sltu(rd, Register::Physical(T::zero_reg()), rs1));
+            } else {
+                let tmp = Register::Virtual(machine_function.new_vreg());
+                out.push(T::emit_xor(tmp, rs1, rs2));
+                out.push(T::emit_sltu(rd, Register::Physical(T::zero_reg()), tmp));
+            }
         }
         ICmpCode::Ugt => out.push(T::emit_sltu(rd, rs2, rs1)),
         ICmpCode::Uge => {
@@ -1605,7 +1686,15 @@ impl<T: LoweringTarget> Lowerer<T> {
                 let mut register_moves = Vec::new();
                 for (index, rs) in lowered_args.into_iter().enumerate() {
                     let rs = if let Some(bits) = int_bits_for_value(module, args[index]) {
-                        emit_masked_value(rs, bits, &mut out, machine_function)
+                        // RV64 ABI: 32-bit (and narrower signed) integer arguments are
+                        // passed sign-extended to XLEN. Producing sign-extended values
+                        // here lets callee-side optimizations skip redundant sign
+                        // extensions on argument uses.
+                        if T::WORD_SIZE == 8 && bits == 32 {
+                            emit_sign_extended_value(rs, bits, &mut out, machine_function)
+                        } else {
+                            emit_masked_value(rs, bits, &mut out, machine_function)
+                        }
                     } else {
                         rs
                     };
@@ -1634,7 +1723,11 @@ impl<T: LoweringTarget> Lowerer<T> {
                     let return_value = if let Some(bits) =
                         int_bits_for_value(module, ValueId::Inst(instruction))
                     {
-                        emit_masked_value(return_reg, bits, &mut out, machine_function)
+                        if T::WORD_SIZE == 8 && bits == 32 {
+                            emit_sign_extended_value(return_reg, bits, &mut out, machine_function)
+                        } else {
+                            emit_masked_value(return_reg, bits, &mut out, machine_function)
+                        }
                     } else {
                         return_reg
                     };

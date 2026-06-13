@@ -1,0 +1,96 @@
+const STACK_SIZE: usize = 256;
+const PROG_SIZE: usize = 512;
+const PUSH: i32 = 1;
+const ADD: i32 = 2;
+const XOR: i32 = 3;
+const POP: i32 = 4;
+const MIX: i32 = 5;
+
+struct VM {
+    pc: i32,
+    sp: i32,
+    stack: [i32; STACK_SIZE],
+    program: [i32; PROG_SIZE],
+    acc: i32,
+}
+
+fn push(vm: &mut VM, value: i32) {
+    vm.sp = (vm.sp + 1) % (STACK_SIZE as i32);
+    vm.stack[vm.sp as usize] = value;
+}
+
+fn pop(vm: &mut VM) -> i32 {
+    let value: i32 = vm.stack[vm.sp as usize];
+    vm.sp = vm.sp - 1;
+    if (vm.sp < 0) {
+        vm.sp += STACK_SIZE as i32;
+    }
+    value
+}
+
+fn fetch(vm: &mut VM) -> i32 {
+    let op: i32 = vm.program[vm.pc as usize];
+    vm.pc = (vm.pc + 1) % (PROG_SIZE as i32);
+    op
+}
+
+fn init_program(vm: &mut VM) {
+    let mut i: i32 = 0;
+    while (i < PROG_SIZE as i32) {
+        let tag: i32 = i % 5;
+        if (tag == 0) {
+            vm.program[i as usize] = PUSH;
+        } else if (tag == 1) {
+            vm.program[i as usize] = (i * 17 + 11) % 997;
+        } else if (tag == 2) {
+            vm.program[i as usize] = ADD;
+        } else if (tag == 3) {
+            vm.program[i as usize] = XOR;
+        } else {
+            vm.program[i as usize] = MIX;
+        }
+        i += 1;
+    }
+}
+
+fn execute(vm: &mut VM, steps: i32) {
+    let mut i: i32 = 0;
+    while (i < steps) {
+        let op: i32 = fetch(vm);
+        if (op == PUSH) {
+            push(vm, fetch(vm));
+        } else if (op == ADD) {
+            let a: i32 = pop(vm);
+            let b: i32 = pop(vm);
+            push(vm, a + b + (i % 8));
+        } else if (op == XOR) {
+            let a: i32 = pop(vm);
+            push(vm, (a ^ (i * 33)) + (a / 2));
+        } else if (op == POP) {
+            vm.acc = vm.acc + pop(vm);
+        } else if (op == MIX) {
+            let a: i32 = pop(vm);
+            let b: i32 = (a * 4) + (i / 2) - (i % 16);
+            push(vm, b);
+            vm.acc = (vm.acc + b) % 1000003;
+        } else {
+            vm.acc = vm.acc + op;
+        }
+        i += 1;
+    }
+}
+
+fn main() {
+    let mut vm: VM = VM {
+        pc: 0,
+        sp: -1,
+        stack: [0; STACK_SIZE],
+        program: [0; PROG_SIZE],
+        acc: 0,
+    };
+    init_program(&mut vm);
+    execute(&mut vm, 4096 * 256);
+    printlnInt(vm.acc);
+    printlnInt(vm.stack[vm.sp as usize]);
+    exit(0);
+}

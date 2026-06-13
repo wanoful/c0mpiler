@@ -1,8 +1,10 @@
 [
   { "name": "opti_bytecode_vm_interpreter", "compileexitcode": 0 },
+  { "name": "opti_bytecode_vm_big", "compileexitcode": 0 },
   { "name": "opti_compute_hash_mix", "compileexitcode": 0 },
   { "name": "opti_array_transform", "compileexitcode": 0 },
   { "name": "opti_dp_suite", "compileexitcode": 0 },
   { "name": "opti_const_divrem", "compileexitcode": 0 },
-  { "name": "opti_redundant_memory", "compileexitcode": 0 }
+  { "name": "opti_redundant_memory", "compileexitcode": 0 },
+  { "name": "opti_graph_algorithms", "compileexitcode": 0 }
 ]
