@@ -49,10 +49,11 @@ impl ModuleCore {
             let live_inst = &function.insts[live_id];
             live_inst.kind.for_each_value_operand(|v, _| {
                 if let ValueId::Inst(InstRef { inst, .. }) = v
-                    && !live_insts.contains(&inst) {
-                        live_insts.insert(inst);
-                        work_list.push(inst);
-                    }
+                    && !live_insts.contains(&inst)
+                {
+                    live_insts.insert(inst);
+                    work_list.push(inst);
+                }
             });
         }
 
@@ -211,10 +212,11 @@ impl ModuleCore {
             let inst = &function.insts[inst_id];
             inst.kind.for_each_value_operand(|v, _| {
                 if let ValueId::Inst(InstRef { inst, .. }) = v
-                    && !live_insts.contains(&inst) {
-                        live_insts.insert(inst);
-                        work_list.push(inst);
-                    }
+                    && !live_insts.contains(&inst)
+                {
+                    live_insts.insert(inst);
+                    work_list.push(inst);
+                }
             });
 
             // Phi 的控制依赖也需要保活
@@ -222,10 +224,11 @@ impl ModuleCore {
                 for PhiIncoming { block, .. } in incomings.values() {
                     let block = &function.blocks[*block];
                     if let Some(term) = block.terminator
-                        && !live_insts.contains(&term) {
-                            live_insts.insert(term);
-                            work_list.push(term);
-                        }
+                        && !live_insts.contains(&term)
+                    {
+                        live_insts.insert(term);
+                        work_list.push(term);
+                    }
                 }
             }
 
@@ -238,10 +241,11 @@ impl ModuleCore {
                 let block_id = f.into_block().unwrap();
                 let block = &function.blocks[block_id];
                 if let Some(term) = block.terminator
-                    && !live_insts.contains(&term) {
-                        live_insts.insert(term);
-                        work_list.push(term);
-                    }
+                    && !live_insts.contains(&term)
+                {
+                    live_insts.insert(term);
+                    work_list.push(term);
+                }
             }
         }
 

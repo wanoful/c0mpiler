@@ -13,9 +13,10 @@ impl<T: LoweringTarget> Lowerer<T> {
             .zip(order.into_iter().skip(1))
         {
             if let Some(last_inst) = block.instructions.last()
-                && T::is_jump_to(last_inst, next_id) {
-                    block.instructions.pop();
-                }
+                && T::is_jump_to(last_inst, next_id)
+            {
+                block.instructions.pop();
+            }
         }
     }
 }

@@ -2,8 +2,8 @@ use std::iter::once;
 
 use crate::{
     ast::{
-        expr::{BinOp, Expr},
         NodeId,
+        expr::{BinOp, Expr},
     },
     impossible,
     ir::{
@@ -12,9 +12,9 @@ use crate::{
         ir_type::TypePtr,
     },
     irgen::{
+        IRGenerator,
         extra::ExprExtra,
         value::{CoreContainerKind, CoreValueContainer, ValueKind},
-        IRGenerator,
     },
     semantics::{analyzer::SemanticAnalyzer, visitor::Visitor},
 };

@@ -169,9 +169,9 @@ impl<'ast> SemanticAnalyzer<'ast> {
     }
 
     pub(crate) fn get_expr_type_opt(&self, expr_id: &NodeId) -> Option<TypeIntern> {
-        self.expr_results.get(expr_id).map(|r| {
-            self.get_value_by_index(&r.value_index).ty
-        })
+        self.expr_results
+            .get(expr_id)
+            .map(|r| self.get_value_by_index(&r.value_index).ty)
     }
 
     pub(crate) fn merge_result_info<'a, I, E>(

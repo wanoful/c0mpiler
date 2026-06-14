@@ -1,6 +1,9 @@
-use std::{fs, io::{stdin, Read}, process::exit};
+use std::{
+    fs,
+    io::{Read, stdin},
+    process::exit,
+};
 
-use clap::Parser;
 use c0mpiler::{
     ast::{Crate, Eatable},
     ir::layout::TargetDataLayout,
@@ -9,6 +12,7 @@ use c0mpiler::{
     mir::lower::{LowerOptions, RV32Lowerer, RV64Lowerer},
     semantics::analyzer::SemanticAnalyzer,
 };
+use clap::Parser;
 
 const BUILTIN_RV32: &str = include_str!("../builtin/builtin_rv32.s");
 const BUILTIN_RV64: &str = include_str!("../builtin/builtin_rv64.s");
@@ -89,19 +93,23 @@ fn main() {
             let asm = match args.target.as_str() {
                 "rv64" => {
                     let mut lowerer = RV64Lowerer::with_options(lower_options);
-                    lowerer.lower_module(&module).unwrap_or_else(|e| {
-                        eprintln!("lowering error: {e}");
-                        exit(5);
-                    })
-                    .to_string()
+                    lowerer
+                        .lower_module(&module)
+                        .unwrap_or_else(|e| {
+                            eprintln!("lowering error: {e}");
+                            exit(5);
+                        })
+                        .to_string()
                 }
                 _ => {
                     let mut lowerer = RV32Lowerer::with_options(lower_options);
-                    lowerer.lower_module(&module).unwrap_or_else(|e| {
-                        eprintln!("lowering error: {e}");
-                        exit(5);
-                    })
-                    .to_string()
+                    lowerer
+                        .lower_module(&module)
+                        .unwrap_or_else(|e| {
+                            eprintln!("lowering error: {e}");
+                            exit(5);
+                        })
+                        .to_string()
                 }
             };
             print!("{asm}");

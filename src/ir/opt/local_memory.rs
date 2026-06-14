@@ -105,8 +105,9 @@ impl ModuleCore {
                 }
                 InstKind::Store { value, ptr } => {
                     let stored_ty = self.value_ty(value).clone();
-                    if let Some((prev_store, _, prev_ty)) =
-                        last_store.get(&ptr).map(|(inst, value, ty)| (*inst, *value, ty.clone()))
+                    if let Some((prev_store, _, prev_ty)) = last_store
+                        .get(&ptr)
+                        .map(|(inst, value, ty)| (*inst, *value, ty.clone()))
                     {
                         if prev_ty == stored_ty {
                             to_remove.push(prev_store);

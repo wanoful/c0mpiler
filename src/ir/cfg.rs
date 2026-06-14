@@ -298,10 +298,13 @@ impl ModuleCore {
         let func = inst.func;
         let parent = self.inst(inst).parent.unwrap();
         let block = self.block(parent);
-        
-        let phi_uses = block.uses.iter().filter(|u| {
-            self.inst(u.user).kind.is_phi()
-        }).cloned().collect::<Vec<_>>();
+
+        let phi_uses = block
+            .uses
+            .iter()
+            .filter(|u| self.inst(u.user).kind.is_phi())
+            .cloned()
+            .collect::<Vec<_>>();
 
         let position = block
             .insts
@@ -322,7 +325,7 @@ impl ModuleCore {
             self.set_terminator(new_block, InstRef { func, inst: term });
         }
 
-        for BlockUse{ user, slot } in phi_uses {
+        for BlockUse { user, slot } in phi_uses {
             self.replace_block_operand(user, slot, new_block);
         }
 
@@ -336,7 +339,7 @@ impl ModuleCore {
                 },
                 None,
             );
-    
+
             self.set_terminator(parent, jump);
         }
 

@@ -472,18 +472,12 @@ fn add_builtin_struct_types(context: &LLVMContext) {
     let fat_ptr = context
         .get_named_struct_type("fat_ptr")
         .unwrap_or_else(|| context.create_opaque_struct_type("fat_ptr"));
-    fat_ptr.set_body(
-        vec![context.ptr_type().into(), length_ty.clone()],
-        false,
-    );
+    fat_ptr.set_body(vec![context.ptr_type().into(), length_ty.clone()], false);
 
     let string = context
         .get_named_struct_type("String")
         .unwrap_or_else(|| context.create_opaque_struct_type("String"));
-    string.set_body(
-        vec![context.ptr_type().into(), length_ty],
-        false,
-    );
+    string.set_body(vec![context.ptr_type().into(), length_ty], false);
 }
 
 fn add_preludes(
@@ -565,10 +559,7 @@ fn add_preludes(
         },
     );
 
-    let string_len_type = context.function_type(
-        usize_ty.clone(),
-        vec![context.ptr_type().into()],
-    );
+    let string_len_type = context.function_type(usize_ty.clone(), vec![context.ptr_type().into()]);
     let string_len_fn = builder
         .module()
         .borrow_mut()

@@ -796,7 +796,8 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
                 kind: CoreContainerKind::Raw { fat: None },
             },
             LitKind::Integer => {
-                let bits = self.analyzer
+                let bits = self
+                    .analyzer
                     .get_expr_type_opt(&extra.self_id)
                     .map(|intern| self.transform_interned_ty_faithfully(intern))
                     .and_then(|ty| ty.as_int().map(|i| i.0))
@@ -809,7 +810,7 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
                     ),
                     kind: CoreContainerKind::Raw { fat: None },
                 }
-            },
+            }
             LitKind::Str | LitKind::StrRaw(_) => {
                 let string = constant.as_constant_string().unwrap();
                 let constant = self.module.borrow_mut().add_string_const(string.clone());
@@ -825,12 +826,10 @@ impl<'ast, 'analyzer> Visitor<'ast> for IRGenerator<'ast, 'analyzer> {
                 CoreValueContainer {
                     value: ValueId::Global(global),
                     kind: CoreContainerKind::Raw {
-                        fat: Some(ValueId::Const(
-                            self.module.borrow_mut().add_int_const(
-                                self.context.target_layout().pointer_size as u8 * 8,
-                                string.len() as i64,
-                            ),
-                        )),
+                        fat: Some(ValueId::Const(self.module.borrow_mut().add_int_const(
+                            self.context.target_layout().pointer_size as u8 * 8,
+                            string.len() as i64,
+                        ))),
                     },
                 }
             }

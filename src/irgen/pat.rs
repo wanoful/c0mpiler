@@ -23,7 +23,8 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
             },
         });
 
-        let ty = self.analyzer
+        let ty = self
+            .analyzer
             .get_expr_type_opt(&self_id)
             .map(|intern| self.transform_interned_ty_faithfully(intern))
             .unwrap_or_else(|| self.get_value_type(&right_ptr));

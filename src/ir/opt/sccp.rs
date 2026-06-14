@@ -79,10 +79,7 @@ impl ModuleCore {
                     .into_iter()
                     .for_each(|inst| {
                         self.visit_phi_inst(
-                            InstRef {
-                                inst,
-                                func: id,
-                            },
+                            InstRef { inst, func: id },
                             &mut value_states,
                             &mut inst_work_list,
                             &visited_block,
@@ -95,10 +92,7 @@ impl ModuleCore {
                     .into_iter()
                     .for_each(|inst| {
                         self.visit_normal_inst(
-                            InstRef {
-                                inst,
-                                func: id,
-                            },
+                            InstRef { inst, func: id },
                             &mut value_states,
                             &mut inst_work_list,
                         );

@@ -64,7 +64,11 @@ impl ModuleCore {
             if !rhs_val.is_power_of_two() {
                 continue;
             }
-            let mask_for_bits = if bits >= 64 { u64::MAX } else { (1u64 << bits) - 1 };
+            let mask_for_bits = if bits >= 64 {
+                u64::MAX
+            } else {
+                (1u64 << bits) - 1
+            };
             if rhs_val >= mask_for_bits.wrapping_add(1) >> 1 && bits < 64 {
                 // rhs would be interpreted as negative — skip.
                 continue;
@@ -74,10 +78,8 @@ impl ModuleCore {
 
             let new_kind = match op {
                 BinaryOpcode::Mul => {
-                    let shift_const = self.add_const(
-                        ty.clone(),
-                        ConstKind::Int(CoreInt::new(shift, bits)),
-                    );
+                    let shift_const =
+                        self.add_const(ty.clone(), ConstKind::Int(CoreInt::new(shift, bits)));
                     InstKind::Binary {
                         op: BinaryOpcode::Shl,
                         lhs,
@@ -85,10 +87,8 @@ impl ModuleCore {
                     }
                 }
                 BinaryOpcode::UDiv => {
-                    let shift_const = self.add_const(
-                        ty.clone(),
-                        ConstKind::Int(CoreInt::new(shift, bits)),
-                    );
+                    let shift_const =
+                        self.add_const(ty.clone(), ConstKind::Int(CoreInt::new(shift, bits)));
                     InstKind::Binary {
                         op: BinaryOpcode::LShr,
                         lhs,
@@ -96,10 +96,8 @@ impl ModuleCore {
                     }
                 }
                 BinaryOpcode::URem => {
-                    let mask_const = self.add_const(
-                        ty.clone(),
-                        ConstKind::Int(CoreInt::new(rhs_val - 1, bits)),
-                    );
+                    let mask_const =
+                        self.add_const(ty.clone(), ConstKind::Int(CoreInt::new(rhs_val - 1, bits)));
                     InstKind::Binary {
                         op: BinaryOpcode::And,
                         lhs,
@@ -107,10 +105,8 @@ impl ModuleCore {
                     }
                 }
                 BinaryOpcode::SDiv if self.is_value_nonneg(lhs, &mut nonneg_cache) => {
-                    let shift_const = self.add_const(
-                        ty.clone(),
-                        ConstKind::Int(CoreInt::new(shift, bits)),
-                    );
+                    let shift_const =
+                        self.add_const(ty.clone(), ConstKind::Int(CoreInt::new(shift, bits)));
                     InstKind::Binary {
                         op: BinaryOpcode::LShr,
                         lhs,
@@ -118,10 +114,8 @@ impl ModuleCore {
                     }
                 }
                 BinaryOpcode::SRem if self.is_value_nonneg(lhs, &mut nonneg_cache) => {
-                    let mask_const = self.add_const(
-                        ty.clone(),
-                        ConstKind::Int(CoreInt::new(rhs_val - 1, bits)),
-                    );
+                    let mask_const =
+                        self.add_const(ty.clone(), ConstKind::Int(CoreInt::new(rhs_val - 1, bits)));
                     InstKind::Binary {
                         op: BinaryOpcode::And,
                         lhs,
@@ -212,12 +206,9 @@ impl ModuleCore {
                     .values()
                     .all(|inc| self.is_value_nonneg(inc.value, cache)),
                 InstKind::Select {
-                    then_val,
-                    else_val,
-                    ..
+                    then_val, else_val, ..
                 } => {
-                    self.is_value_nonneg(*then_val, cache)
-                        && self.is_value_nonneg(*else_val, cache)
+                    self.is_value_nonneg(*then_val, cache) && self.is_value_nonneg(*else_val, cache)
                 }
                 _ => false,
             },
@@ -231,7 +222,8 @@ impl ModuleCore {
     fn register_inst_use_pub(&mut self, user: InstRef) {
         let kind = self.inst(user).kind.clone();
         kind.for_each_value_operand(|value, slot| {
-            self.value_uses_mut(value).push(crate::ir::core::Use { user, slot });
+            self.value_uses_mut(value)
+                .push(crate::ir::core::Use { user, slot });
         });
     }
 

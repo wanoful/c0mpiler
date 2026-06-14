@@ -75,7 +75,12 @@ impl ModuleCore {
 
             let mut work_list = vec![latch];
             while let Some(block) = work_list.pop() {
-                for pred in cfg.preds.get(&CFGNode::Block(block)).cloned().unwrap_or_default() {
+                for pred in cfg
+                    .preds
+                    .get(&CFGNode::Block(block))
+                    .cloned()
+                    .unwrap_or_default()
+                {
                     if let CFGNode::Block(pred_id) = pred {
                         if pred_id != header && blocks.insert(pred_id) {
                             work_list.push(pred_id);
@@ -104,7 +109,11 @@ impl ModuleCore {
         dom_tree: &DominatorTree,
     ) -> BlockId {
         let header_node = CFGNode::Block(header);
-        let idom_node = dom_tree.idom.get(&header_node).copied().unwrap_or(header_node);
+        let idom_node = dom_tree
+            .idom
+            .get(&header_node)
+            .copied()
+            .unwrap_or(header_node);
 
         match idom_node {
             CFGNode::Block(idom_block) => {
@@ -118,11 +127,7 @@ impl ModuleCore {
         header
     }
 
-    fn hoist_loop_invariants(
-        &mut self,
-        func_id: FunctionId,
-        loop_info: &LoopInfo,
-    ) {
+    fn hoist_loop_invariants(&mut self, func_id: FunctionId, loop_info: &LoopInfo) {
         if loop_info.insertion_block == loop_info.header {
             return;
         }
@@ -164,7 +169,12 @@ impl ModuleCore {
         }
     }
 
-    fn is_loop_invariant(&self, func_id: FunctionId, inst_ref: InstRef, loop_info: &LoopInfo) -> bool {
+    fn is_loop_invariant(
+        &self,
+        func_id: FunctionId,
+        inst_ref: InstRef,
+        loop_info: &LoopInfo,
+    ) -> bool {
         let inst = self.inst(inst_ref);
 
         match &inst.kind {
@@ -203,7 +213,12 @@ impl ModuleCore {
         all_invariant
     }
 
-    fn is_load_safe_to_hoist(&self, func_id: FunctionId, load_ptr: ValueId, loop_info: &LoopInfo) -> bool {
+    fn is_load_safe_to_hoist(
+        &self,
+        func_id: FunctionId,
+        load_ptr: ValueId,
+        loop_info: &LoopInfo,
+    ) -> bool {
         for &block_id in loop_info.blocks.iter() {
             let block_ref = BlockRef {
                 func: func_id,
@@ -271,8 +286,10 @@ impl ModuleCore {
 
     fn roots_known_distinct(&self, lhs: ValueId, rhs: ValueId) -> bool {
         // Two distinct allocas / args / globals are guaranteed not to alias.
-        let is_root = |v: ValueId| matches!(v, ValueId::Arg(..) | ValueId::Global(..))
-            || matches!(v, ValueId::Inst(i) if matches!(self.inst(i).kind, InstKind::Alloca { .. }));
+        let is_root = |v: ValueId| {
+            matches!(v, ValueId::Arg(..) | ValueId::Global(..))
+                || matches!(v, ValueId::Inst(i) if matches!(self.inst(i).kind, InstKind::Alloca { .. }))
+        };
         is_root(lhs) && is_root(rhs)
     }
 
@@ -321,8 +338,6 @@ impl ModuleCore {
     }
 
     fn inst_exists_licm(&self, inst_ref: InstRef) -> bool {
-        self.func(inst_ref.func)
-            .insts
-            .contains_key(inst_ref.inst)
+        self.func(inst_ref.func).insts.contains_key(inst_ref.inst)
     }
 }

@@ -5,9 +5,10 @@ impl<T: LoweringTarget> Lowerer<T> {
         for block in machine_function.blocks.iter_mut() {
             block.instructions.retain(|inst| {
                 if let Some((src, dst)) = inst.as_move()
-                    && src == dst {
-                        return false;
-                    }
+                    && src == dst
+                {
+                    return false;
+                }
                 true
             });
         }
