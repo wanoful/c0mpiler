@@ -102,6 +102,9 @@ impl ModuleCore {
                 if self.is_zero_const(rhs) {
                     return Some(lhs);
                 }
+                if lhs == rhs {
+                    return self.make_zero_const(ty);
+                }
             }
             BinaryOpcode::Mul => {
                 if self.is_one_const(rhs) {
@@ -137,6 +140,9 @@ impl ModuleCore {
                 if self.is_all_ones_const(lhs, ty) {
                     return Some(rhs);
                 }
+                if lhs == rhs {
+                    return Some(lhs);
+                }
             }
             BinaryOpcode::Or => {
                 if self.is_zero_const(rhs) {
@@ -147,6 +153,9 @@ impl ModuleCore {
                 }
                 if self.is_all_ones_const(rhs, ty) || self.is_all_ones_const(lhs, ty) {
                     return self.make_all_ones_const(ty);
+                }
+                if lhs == rhs {
+                    return Some(lhs);
                 }
             }
             BinaryOpcode::Xor => {

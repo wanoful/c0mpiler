@@ -84,10 +84,10 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
                                     vec![zero, one],
                                     None,
                                 );
-                        ValueId::Inst(self.builder.build_load(
-                            self.context.ptr_width_int_type().into(),
-                            ValueId::Inst(p),
-                            None,
+                                ValueId::Inst(self.builder.build_load(
+                                    self.context.ptr_width_int_type().into(),
+                                    ValueId::Inst(p),
+                                    None,
                                 ))
                             }),
                         },

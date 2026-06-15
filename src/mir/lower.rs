@@ -799,14 +799,8 @@ fn emit_add_offset<T: LoweringTarget>(
                 None
             };
             if let Some(value) = zext_src {
-                let src_reg = lower_operand(
-                    module,
-                    value,
-                    out,
-                    state,
-                    machine_function,
-                    machine_module,
-                )?;
+                let src_reg =
+                    lower_operand(module, value, out, state, machine_function, machine_module)?;
                 out.push(T::emit_slli(temp_reg, src_reg, 32));
                 out.push(T::emit_srli(temp_reg, temp_reg, 32 - shift));
                 let result_reg = Register::Virtual(machine_function.new_vreg());

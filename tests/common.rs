@@ -1,4 +1,8 @@
-use std::{fs, panic::{self, AssertUnwindSafe}, path::Path};
+use std::{
+    fs,
+    panic::{self, AssertUnwindSafe},
+    path::Path,
+};
 
 use c0mpiler::{
     ast::{Crate, Eatable},

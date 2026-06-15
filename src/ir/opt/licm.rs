@@ -1,9 +1,11 @@
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use crate::ir::{
     cfg::{CFGNode, ControlFlowGraph, DominatorTree},
-    core::{BlockId, BlockRef, FunctionId, InstRef, ModuleCore, ValueId},
+    core::{BlockId, BlockRef, BlockUse, FunctionId, InstRef, ModuleCore, ValueId},
     core_inst::InstKind,
+    ir_type::{Type, VoidType},
 };
 
 struct LoopInfo {
@@ -34,7 +36,16 @@ impl ModuleCore {
             return;
         }
 
-        let loops = self.collect_loops(id, &cfg, &dom_tree, &latches);
+        let mut loops = self.collect_loops(id, &cfg, &dom_tree, &latches);
+
+        // Try to create preheaders for loops that lack them.
+        for loop_info in loops.iter_mut() {
+            if loop_info.insertion_block == loop_info.header {
+                if let Some(preheader) = self.try_create_preheader(id, &cfg, loop_info) {
+                    loop_info.insertion_block = preheader;
+                }
+            }
+        }
 
         for loop_info in loops.iter() {
             self.hoist_loop_invariants(id, loop_info);
@@ -75,7 +86,12 @@ impl ModuleCore {
 
             let mut work_list = vec![latch];
             while let Some(block) = work_list.pop() {
-                for pred in cfg.preds.get(&CFGNode::Block(block)).cloned().unwrap_or_default() {
+                for pred in cfg
+                    .preds
+                    .get(&CFGNode::Block(block))
+                    .cloned()
+                    .unwrap_or_default()
+                {
                     if let CFGNode::Block(pred_id) = pred {
                         if pred_id != header && blocks.insert(pred_id) {
                             work_list.push(pred_id);
@@ -104,7 +120,11 @@ impl ModuleCore {
         dom_tree: &DominatorTree,
     ) -> BlockId {
         let header_node = CFGNode::Block(header);
-        let idom_node = dom_tree.idom.get(&header_node).copied().unwrap_or(header_node);
+        let idom_node = dom_tree
+            .idom
+            .get(&header_node)
+            .copied()
+            .unwrap_or(header_node);
 
         match idom_node {
             CFGNode::Block(idom_block) => {
@@ -118,11 +138,131 @@ impl ModuleCore {
         header
     }
 
-    fn hoist_loop_invariants(
+    /// Create a preheader block for a loop that lacks one.
+    /// Returns the new preheader block id, or None if creation fails.
+    fn try_create_preheader(
         &mut self,
         func_id: FunctionId,
+        cfg: &ControlFlowGraph,
         loop_info: &LoopInfo,
-    ) {
+    ) -> Option<BlockId> {
+        let header = loop_info.header;
+        let header_node = CFGNode::Block(header);
+
+        // Find predecessors of the header that are outside the loop body.
+        let outside_preds: Vec<BlockId> = cfg
+            .preds
+            .get(&header_node)
+            .map(|preds| {
+                preds
+                    .iter()
+                    .filter_map(|p| p.as_block().copied())
+                    .filter(|b| !loop_info.blocks.contains(b))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if outside_preds.is_empty() {
+            return None;
+        }
+
+        // Create preheader block
+        let preheader_ref = self.append_block(func_id, Some("preheader".to_string()));
+        let preheader = preheader_ref.block;
+
+        // Collect phi incomings to update
+        let header_ref = BlockRef {
+            func: func_id,
+            block: header,
+        };
+        let phi_updates: Vec<(InstRef, Vec<(usize, ValueId)>)> = self
+            .phis_in_order(header_ref)
+            .iter()
+            .filter_map(|&phi| {
+                let phi_data = self.inst(phi).kind.clone();
+                let incomings = phi_data.as_phi()?.0.clone();
+                let updates: Vec<(usize, ValueId)> = incomings
+                    .iter()
+                    .filter_map(|(&idx, incoming)| {
+                        if outside_preds.contains(&incoming.block) {
+                            Some((idx, incoming.value))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if updates.is_empty() {
+                    None
+                } else {
+                    Some((phi, updates))
+                }
+            })
+            .collect();
+
+        // Update outside predecessors' terminators to point to preheader
+        for &pred in &outside_preds {
+            let pred_ref = BlockRef {
+                func: func_id,
+                block: pred,
+            };
+            if let Some(term) = self.terminator(pred_ref) {
+                let mut term_kind = self.inst(term).kind.clone();
+                let mut slots_to_update = Vec::new();
+                term_kind.for_each_block_operand(|block_id, slot| {
+                    if block_id == header {
+                        slots_to_update.push(slot);
+                    }
+                });
+                if !slots_to_update.is_empty() {
+                    for slot in slots_to_update {
+                        term_kind.replace_block_operand(slot, preheader);
+                    }
+                    // Remove old block uses of header from this terminator
+                    let header_block_ref = BlockRef {
+                        func: func_id,
+                        block: header,
+                    };
+                    self.block_uses_mut(header_block_ref)
+                        .retain(|u| u.user != term);
+                    // Add new block uses of preheader
+                    term_kind.for_each_block_operand(|block_id, slot| {
+                        if block_id == preheader {
+                            self.block_uses_mut(preheader_ref)
+                                .push(BlockUse { user: term, slot });
+                        }
+                    });
+                    self.inst_mut(term).kind = term_kind;
+                }
+            }
+        }
+
+        // Add unconditional branch from preheader to header
+        let branch = self.new_inst(
+            func_id,
+            Rc::new(Type::Void(VoidType)),
+            InstKind::Branch {
+                then_block: header,
+                cond: None,
+            },
+            None,
+        );
+        self.set_terminator(preheader_ref, branch);
+
+        // Update phi nodes: replace incoming blocks from outside preds with preheader
+        for (phi, updates) in phi_updates {
+            // Remove old incomings and add new ones pointing to preheader
+            for (idx, _value) in updates.iter().rev() {
+                self.phi_remove_incoming_from(phi, *idx);
+            }
+            for (_, value) in updates {
+                self.phi_add_incoming(phi, preheader_ref, value);
+            }
+        }
+
+        Some(preheader)
+    }
+
+    fn hoist_loop_invariants(&mut self, func_id: FunctionId, loop_info: &LoopInfo) {
         if loop_info.insertion_block == loop_info.header {
             return;
         }
@@ -164,7 +304,12 @@ impl ModuleCore {
         }
     }
 
-    fn is_loop_invariant(&self, func_id: FunctionId, inst_ref: InstRef, loop_info: &LoopInfo) -> bool {
+    fn is_loop_invariant(
+        &self,
+        func_id: FunctionId,
+        inst_ref: InstRef,
+        loop_info: &LoopInfo,
+    ) -> bool {
         let inst = self.inst(inst_ref);
 
         match &inst.kind {
@@ -203,7 +348,12 @@ impl ModuleCore {
         all_invariant
     }
 
-    fn is_load_safe_to_hoist(&self, func_id: FunctionId, load_ptr: ValueId, loop_info: &LoopInfo) -> bool {
+    fn is_load_safe_to_hoist(
+        &self,
+        func_id: FunctionId,
+        load_ptr: ValueId,
+        loop_info: &LoopInfo,
+    ) -> bool {
         for &block_id in loop_info.blocks.iter() {
             let block_ref = BlockRef {
                 func: func_id,
@@ -271,8 +421,10 @@ impl ModuleCore {
 
     fn roots_known_distinct(&self, lhs: ValueId, rhs: ValueId) -> bool {
         // Two distinct allocas / args / globals are guaranteed not to alias.
-        let is_root = |v: ValueId| matches!(v, ValueId::Arg(..) | ValueId::Global(..))
-            || matches!(v, ValueId::Inst(i) if matches!(self.inst(i).kind, InstKind::Alloca { .. }));
+        let is_root = |v: ValueId| {
+            matches!(v, ValueId::Arg(..) | ValueId::Global(..))
+                || matches!(v, ValueId::Inst(i) if matches!(self.inst(i).kind, InstKind::Alloca { .. }))
+        };
         is_root(lhs) && is_root(rhs)
     }
 
@@ -321,8 +473,6 @@ impl ModuleCore {
     }
 
     fn inst_exists_licm(&self, inst_ref: InstRef) -> bool {
-        self.func(inst_ref.func)
-            .insts
-            .contains_key(inst_ref.inst)
+        self.func(inst_ref.func).insts.contains_key(inst_ref.inst)
     }
 }
