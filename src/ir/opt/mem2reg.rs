@@ -23,24 +23,30 @@ impl ModuleCore {
         let dom_tree = cfg.build_dom_tree();
         let dom_frontiers = cfg.build_dom_frontier(&dom_tree);
 
-        let allocas = function.blocks[function.entry]
-            .insts
+        let allocas = function
+            .block_order
             .iter()
-            .filter_map(|&inst_id| {
-                let inst = &function.insts[inst_id];
-                if let InstKind::Alloca { ty } = &inst.kind {
-                    let mut defs = Vec::new();
-                    for Use { user, slot } in inst.uses.iter() {
-                        match slot {
-                            OperandSlot::StorePtr => defs.push(*user),
-                            OperandSlot::LoadPtr => {}
-                            _ => return None,
+            .flat_map(|&block_id| {
+                function.blocks[block_id]
+                    .insts
+                    .iter()
+                    .filter_map(|&inst_id| {
+                        let inst = &function.insts[inst_id];
+                        if let InstKind::Alloca { ty } = &inst.kind {
+                            let mut defs = Vec::new();
+                            for Use { user, slot } in inst.uses.iter() {
+                                match slot {
+                                    OperandSlot::StorePtr => defs.push(*user),
+                                    OperandSlot::LoadPtr => {}
+                                    _ => return None,
+                                }
+                            }
+                            Some((inst_id, defs, ty.clone()))
+                        } else {
+                            None
                         }
-                    }
-                    Some((inst_id, defs, ty.clone()))
-                } else {
-                    None
-                }
+                    })
+                    .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
 

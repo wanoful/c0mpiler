@@ -464,6 +464,15 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         self.opt_local_memory();
         self.opt_adce();
         self.opt_cfg_simplify();
+        // Additional iteration to exploit opportunities exposed by LICM
+        self.opt_mem2reg();
+        self.opt_algebraic_simplification();
+        self.opt_local_gvn();
+        self.opt_local_memory();
+        self.opt_sccp();
+        self.opt_strength_reduction();
+        self.opt_adce();
+        self.opt_cfg_simplify();
     }
 }
 

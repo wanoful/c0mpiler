@@ -188,12 +188,12 @@ impl ModuleCore {
                     }
                     BinaryOpcode::LShr => true,
                     BinaryOpcode::UDiv | BinaryOpcode::URem => true,
-                    BinaryOpcode::Shl
-                    | BinaryOpcode::AShr
-                    | BinaryOpcode::Add
-                    | BinaryOpcode::Mul => {
+                    BinaryOpcode::Shl | BinaryOpcode::AShr => {
                         self.is_value_nonneg(*lhs, cache) && self.is_value_nonneg(*rhs, cache)
                     }
+                    // Add/Mul can overflow, producing a negative result from non-negative inputs.
+                    // Be conservative: don't claim non-negative for them.
+                    BinaryOpcode::Add | BinaryOpcode::Mul => false,
                     BinaryOpcode::Sub => false,
                     BinaryOpcode::SDiv => {
                         self.is_value_nonneg(*lhs, cache) && self.is_value_nonneg(*rhs, cache)

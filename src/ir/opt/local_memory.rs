@@ -174,7 +174,7 @@ impl ModuleCore {
             return true;
         };
         if lhs_root != rhs_root {
-            return true;
+            return !self.roots_known_distinct_local(lhs_root, rhs_root);
         }
 
         for (lhs_index, rhs_index) in lhs_path.iter().zip(rhs_path.iter()) {
@@ -191,6 +191,14 @@ impl ModuleCore {
         }
 
         true
+    }
+
+    fn roots_known_distinct_local(&self, lhs: ValueId, rhs: ValueId) -> bool {
+        let is_root = |v: ValueId| {
+            matches!(v, ValueId::Arg(..) | ValueId::Global(..))
+                || matches!(v, ValueId::Inst(i) if matches!(self.inst(i).kind, InstKind::Alloca { .. }))
+        };
+        is_root(lhs) && is_root(rhs)
     }
 
     fn ptr_path(&self, ptr: ValueId) -> Option<(ValueId, Vec<ValueId>)> {

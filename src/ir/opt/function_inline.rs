@@ -102,26 +102,30 @@ where
     let mut visited = HashSet::new();
     let mut order = Vec::new();
 
-    fn dfs_visit<T>(
-        func_id: T,
-        visited: &mut HashSet<T>,
-        order: &mut Vec<T>,
-        succs: &HashMap<T, HashSet<T>>,
-    ) where
-        T: Eq + Hash + Copy,
-    {
-        if !visited.insert(func_id) {
-            return;
-        }
-        for &succ in &succs[&func_id] {
-            dfs_visit(succ, visited, order, succs);
-        }
-        order.push(func_id);
-    }
-
     for func_id in dfs_order {
+        if visited.contains(&func_id) {
+            continue;
+        }
         let mut o = Vec::new();
-        dfs_visit(func_id, &mut visited, &mut o, succs);
+        // Iterative DFS to avoid stack overflow on deep call graphs.
+        let mut stack: Vec<(T, usize)> = vec![(func_id, 0)];
+        visited.insert(func_id);
+        while let Some((node, idx)) = stack.last_mut() {
+            let succs_list: Vec<T> = succs
+                .get(node)
+                .map(|s| s.iter().copied().collect())
+                .unwrap_or_default();
+            if *idx < succs_list.len() {
+                let succ = succs_list[*idx];
+                *idx += 1;
+                if visited.insert(succ) {
+                    stack.push((succ, 0));
+                }
+            } else {
+                o.push(*node);
+                stack.pop();
+            }
+        }
         order.push(o);
     }
 
@@ -134,14 +138,14 @@ impl ModuleCore {
         let scc_graph = call_graph.build_scc();
         let topological_order = scc_graph.topological_sort();
 
-        // for (i, &scc_id) in topological_order.iter().enumerate() {
-        //     eprintln!("SCC {}: {:?}", i, scc_graph.sccs[scc_id].iter().map(|s| {self.func(*s).name.clone()}).collect::<Vec<_>>());
-        // }
-
         for scc_id in topological_order.into_iter().rev() {
             let scc = &scc_graph.sccs[scc_id];
             for &func_id in scc {
                 let func = self.func(func_id);
+                // Skip if function is already large to prevent exponential growth
+                if func.insts.len() > 2000 {
+                    continue;
+                }
                 let mut inlinable_insts = Vec::new();
                 for block in func.block_order.iter() {
                     for inst in func.blocks[*block].insts.iter() {
