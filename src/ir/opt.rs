@@ -2,6 +2,7 @@ pub mod algebraic;
 pub mod cfg_simpilfy;
 pub mod dce;
 pub mod function_inline;
+pub mod global_gvn;
 pub mod gvn;
 pub mod licm;
 pub mod local_memory;
