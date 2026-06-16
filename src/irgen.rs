@@ -384,6 +384,10 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         self.module.borrow_mut().opt_pass_mem2reg();
     }
 
+    pub fn opt_sroa(&mut self) {
+        self.module.borrow_mut().opt_sroa();
+    }
+
     pub fn opt_dce(&mut self) {
         self.module.borrow_mut().opt_dead_code_elimination();
     }
@@ -432,6 +436,10 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         self.module.borrow_mut().opt_local_gvn();
     }
 
+    pub fn opt_global_gvn(&mut self) {
+        self.module.borrow_mut().opt_global_gvn();
+    }
+
     pub fn opt_strength_reduction(&mut self) {
         self.module.borrow_mut().opt_strength_reduction();
     }
@@ -439,9 +447,11 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
     pub fn opt_all(&mut self) {
         self.opt_merge_return();
         self.opt_scalar_memcpy();
+        self.opt_sroa();
         self.opt_mem2reg();
         self.opt_algebraic_simplification();
         self.opt_local_gvn();
+        self.opt_global_gvn();
         self.opt_local_memory();
         self.opt_sccp();
         self.opt_strength_reduction();
@@ -451,9 +461,11 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         self.opt_function_inline();
         self.opt_merge_return();
         self.opt_scalar_memcpy();
+        self.opt_sroa();
         self.opt_mem2reg();
         self.opt_algebraic_simplification();
         self.opt_local_gvn();
+        self.opt_global_gvn();
         self.opt_local_memory();
         self.opt_sccp();
         self.opt_strength_reduction();
@@ -461,13 +473,16 @@ impl<'ast, 'analyzer> IRGenerator<'ast, 'analyzer> {
         self.opt_cfg_simplify();
         self.opt_licm();
         self.opt_local_gvn();
+        self.opt_global_gvn();
         self.opt_local_memory();
         self.opt_adce();
         self.opt_cfg_simplify();
         // Additional iteration to exploit opportunities exposed by LICM
+        self.opt_sroa();
         self.opt_mem2reg();
         self.opt_algebraic_simplification();
         self.opt_local_gvn();
+        self.opt_global_gvn();
         self.opt_local_memory();
         self.opt_sccp();
         self.opt_strength_reduction();
