@@ -9,4 +9,5 @@ pub mod mem2reg;
 pub mod merge_return;
 pub mod scalar_memcpy;
 pub mod sccp;
+pub mod sroa;
 pub mod strength;
