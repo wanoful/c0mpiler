@@ -14,7 +14,7 @@ use std::{
 use crate::{
     ir::{
         core::{BlockRef, FunctionId, InstRef, ModuleCore, ValueId},
-        core_inst::{BinaryOpcode, ICmpCode, InstKind},
+        core_inst::{BinaryOpcode, ICmpCode, InstKind, OperandSlot},
         core_value::{ConstKind, GlobalKind},
         ir_type::TypePtr,
         layout::{LayoutShape, TypeLayout, TypeLayoutEngine},
@@ -887,6 +887,83 @@ fn emit_icmp<T: LoweringTarget>(
     }
 }
 
+fn branch_cond_icmp(module: &ModuleCore, value: ValueId) -> Option<(ICmpCode, ValueId, ValueId)> {
+    let ValueId::Inst(inst_ref) = value else {
+        return None;
+    };
+    if !icmp_is_only_branch_cond(module, inst_ref) {
+        return None;
+    }
+    let InstKind::ICmp { op, lhs, rhs } = module.inst(inst_ref).kind else {
+        return None;
+    };
+    Some((op, lhs, rhs))
+}
+
+fn icmp_is_only_branch_cond(module: &ModuleCore, inst_ref: InstRef) -> bool {
+    module
+        .value_uses(ValueId::Inst(inst_ref))
+        .iter()
+        .all(|use_| use_.slot == OperandSlot::BranchCond)
+}
+
+fn emit_icmp_branch<T: LoweringTarget>(
+    icmp_code: ICmpCode,
+    rs1: Register<T::PhysicalReg>,
+    rs2: Register<T::PhysicalReg>,
+    label: BlockId,
+) -> T::MachineInst {
+    match icmp_code {
+        ICmpCode::Eq => T::emit_branch_eq(rs1, rs2, label),
+        ICmpCode::Ne => T::emit_branch_ne(rs1, rs2, label),
+        ICmpCode::Ugt => T::emit_branch_ltu(rs2, rs1, label),
+        ICmpCode::Uge => T::emit_branch_geu(rs1, rs2, label),
+        ICmpCode::Ult => T::emit_branch_ltu(rs1, rs2, label),
+        ICmpCode::Ule => T::emit_branch_geu(rs2, rs1, label),
+        ICmpCode::Sgt => T::emit_branch_lt(rs2, rs1, label),
+        ICmpCode::Sge => T::emit_branch_ge(rs1, rs2, label),
+        ICmpCode::Slt => T::emit_branch_lt(rs1, rs2, label),
+        ICmpCode::Sle => T::emit_branch_ge(rs2, rs1, label),
+    }
+}
+
+fn lower_icmp_operands<T: LoweringTarget>(
+    module: &ModuleCore,
+    lhs: ValueId,
+    rhs: ValueId,
+    icmp_code: &ICmpCode,
+    out: &mut Vec<T::MachineInst>,
+    state: &FunctionLoweringState,
+    machine_function: &mut MachineFunction<T>,
+    machine_module: &MachineModule<T>,
+) -> Result<(Register<T::PhysicalReg>, Register<T::PhysicalReg>), LowerError> {
+    let mut rs1 = lower_operand(module, lhs, out, state, machine_function, machine_module)?;
+    let mut rs2 = lower_operand(module, rhs, out, state, machine_function, machine_module)?;
+    if let Some(bits) = int_bits_for_value(module, lhs) {
+        rs1 = emit_normalized_int_operand(
+            module,
+            lhs,
+            rs1,
+            bits,
+            icmp_operands_are_signed(icmp_code),
+            out,
+            machine_function,
+        );
+    }
+    if let Some(bits) = int_bits_for_value(module, rhs) {
+        rs2 = emit_normalized_int_operand(
+            module,
+            rhs,
+            rs2,
+            bits,
+            icmp_operands_are_signed(icmp_code),
+            out,
+            machine_function,
+        );
+    }
+    Ok((rs1, rs2))
+}
+
 #[derive(Debug, Default)]
 struct ModuleLoweringState {
     function_symbols: HashMap<String, SymbolId>,
@@ -1739,14 +1816,6 @@ impl<T: LoweringTarget> Lowerer<T> {
                 };
 
                 if let Some(cond_branch) = cond {
-                    let cond = lower_operand(
-                        module,
-                        cond_branch.cond,
-                        &mut out,
-                        state,
-                        machine_function,
-                        machine_module,
-                    )?;
                     let true_block = BlockRef {
                         func: block.func,
                         block: *then_block,
@@ -1805,11 +1874,34 @@ impl<T: LoweringTarget> Lowerer<T> {
                             add_transit_block(false_block_id, false_block_phis.clone())?;
                     };
 
-                    out.push(T::emit_branch_ne(
-                        cond,
-                        Register::Physical(T::zero_reg()),
-                        true_block_id,
-                    ));
+                    if let Some((icmp_code, lhs, rhs)) = branch_cond_icmp(module, cond_branch.cond)
+                    {
+                        let (rs1, rs2) = lower_icmp_operands(
+                            module,
+                            lhs,
+                            rhs,
+                            &icmp_code,
+                            &mut out,
+                            state,
+                            machine_function,
+                            machine_module,
+                        )?;
+                        out.push(emit_icmp_branch::<T>(icmp_code, rs1, rs2, true_block_id));
+                    } else {
+                        let cond = lower_operand(
+                            module,
+                            cond_branch.cond,
+                            &mut out,
+                            state,
+                            machine_function,
+                            machine_module,
+                        )?;
+                        out.push(T::emit_branch_ne(
+                            cond,
+                            Register::Physical(T::zero_reg()),
+                            true_block_id,
+                        ));
+                    }
                     out.push(T::emit_jump(false_block_id));
                 } else {
                     let target_block = BlockRef {
@@ -2057,44 +2149,20 @@ impl<T: LoweringTarget> Lowerer<T> {
                 }
             }
             InstKind::ICmp { op, lhs, rhs } => {
-                let mut rs1 = lower_operand(
+                if icmp_is_only_branch_cond(module, instruction) {
+                    return Ok(out);
+                }
+
+                let (rs1, rs2) = lower_icmp_operands(
                     module,
                     *lhs,
-                    &mut out,
-                    state,
-                    machine_function,
-                    machine_module,
-                )?;
-                let mut rs2 = lower_operand(
-                    module,
                     *rhs,
+                    op,
                     &mut out,
                     state,
                     machine_function,
                     machine_module,
                 )?;
-                if let Some(bits) = int_bits_for_value(module, *lhs) {
-                    rs1 = emit_normalized_int_operand(
-                        module,
-                        *lhs,
-                        rs1,
-                        bits,
-                        icmp_operands_are_signed(op),
-                        &mut out,
-                        machine_function,
-                    );
-                }
-                if let Some(bits) = int_bits_for_value(module, *rhs) {
-                    rs2 = emit_normalized_int_operand(
-                        module,
-                        *rhs,
-                        rs2,
-                        bits,
-                        icmp_operands_are_signed(op),
-                        &mut out,
-                        machine_function,
-                    );
-                }
                 let rd_vreg = self.ensure_inst_vreg(instruction, machine_function, state);
                 let rd = Register::Virtual(rd_vreg);
                 emit_icmp(op, rd, rs1, rs2, &mut out, machine_function);
