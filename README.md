@@ -90,6 +90,56 @@ The CLI options are:
 --no-builtin          do not print builtin assembly on stderr
 ```
 
+## Optimization Pipeline
+
+The compiler runs `IRGenerator::opt_all()` before IR printing or assembly
+lowering. The pipeline combines scalar promotion, simplification, value
+numbering, memory cleanup, loop optimization, inlining, and final cleanup passes
+over several rounds so that later passes can use opportunities exposed by
+earlier ones.
+
+Current IR optimization passes:
+
+| Pass | Purpose |
+| --- | --- |
+| `merge_return` | Merge function exits into a simpler return shape. |
+| `scalar_memcpy` | Replace small `llvm.memcpy.*` / `llvm.memmove.*` calls with scalar loads and stores. |
+| `sroa` | Split aggregate allocas into field-level allocas when accesses are simple and static. |
+| `mem2reg` | Promote stack slots to SSA values. |
+| `algebraic_simplification` | Fold algebraic identities, simple comparisons, casts, phis, selects, and constant global loads. |
+| `local_gvn` | Eliminate equivalent expressions within one basic block. |
+| `global_gvn` | Eliminate equivalent expressions across dominated blocks using the dominator tree. |
+| `local_memory` | Remove duplicate GEPs, forward local loads, and delete overwritten stores with conservative alias checks. |
+| `sccp` | Run sparse conditional constant propagation. |
+| `strength_reduction` | Rewrite power-of-two multiply/divide/remainder into shifts and masks when safe. |
+| `cfg_simplify` | Simplify control-flow after constants and dead code expose empty or redundant blocks. |
+| `dce` / `adce` | Remove ordinary and aggressively discovered dead code. |
+| `function_inline` | Inline suitable functions, then rerun cleanup and scalar optimizations. |
+| `licm` | Move loop-invariant instructions out of loops when legal. |
+
+The optimization pipeline currently exposes 15 IR pass entry points:
+`mem2reg`, `sroa`, `dce`, `adce`, `sccp`, `cfg_simplify`, `merge_return`,
+`function_inline`, `algebraic_simplification`, `licm`, `scalar_memcpy`,
+`local_memory`, `local_gvn`, `global_gvn`, and `strength_reduction`.
+
+Machine-level and lowering optimizations:
+
+| Optimization | Purpose |
+| --- | --- |
+| RV64 32-bit lowering | Use RV64 word operations for 32-bit arithmetic where possible. |
+| RV64 W instructions | Model and emit `addw`, `subw`, `mulw`, `divw`, `remw`, `sllw`, `srlw`, `sraw`, and immediate variants. |
+| Integer normalization | Mask or sign-extend narrow integer values only when required by the operation or ABI. |
+| Sign-extension suppression | Detect already sign-extended RV64 i32 values and skip redundant extension sequences. |
+| Constant arithmetic lowering | Lower simple constant multiply/divide/remainder cases into moves, negation, shifts, masks, or cheaper instruction sequences. |
+| Inline small memcpy | Expand small `llvm.memcpy.*` calls directly in lowering; 4-byte copies use one word load/store. |
+| Zero-offset address cleanup | Avoid generating address additions when a GEP or field offset is zero. |
+| Fallthrough and peephole cleanup | Remove redundant fallthrough jumps and run target peephole cleanup before assembly printing. |
+| Branch relaxation fixups | Keep branch relaxation correct after fallthrough removal changes block layout. |
+
+Optimization support includes release-mode build/run targets, RV64 qemu/perf
+profiling through `scripts/perf_rv64_case.sh`, generated RV32/RV64 builtin
+assembly, and local optimization testcases under `testcases/opti-local`.
+
 ## Common Test Commands
 
 Run all Rust tests:
