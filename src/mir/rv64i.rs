@@ -712,6 +712,26 @@ impl LoweringTarget for RV64Arch {
         RV64Inst::Bne { rs1, rs2, label }
     }
 
+    fn emit_branch_eq(rs1: Reg, rs2: Reg, label: BlockId) -> Self::MachineInst {
+        RV64Inst::Beq { rs1, rs2, label }
+    }
+
+    fn emit_branch_lt(rs1: Reg, rs2: Reg, label: BlockId) -> Self::MachineInst {
+        RV64Inst::Blt { rs1, rs2, label }
+    }
+
+    fn emit_branch_ge(rs1: Reg, rs2: Reg, label: BlockId) -> Self::MachineInst {
+        RV64Inst::Bge { rs1, rs2, label }
+    }
+
+    fn emit_branch_ltu(rs1: Reg, rs2: Reg, label: BlockId) -> Self::MachineInst {
+        RV64Inst::Bltu { rs1, rs2, label }
+    }
+
+    fn emit_branch_geu(rs1: Reg, rs2: Reg, label: BlockId) -> Self::MachineInst {
+        RV64Inst::Bgeu { rs1, rs2, label }
+    }
+
     fn emit_jump(label: BlockId) -> Self::MachineInst {
         RV64Inst::Jal {
             rd: Register::Physical(RV64Reg::Zero),

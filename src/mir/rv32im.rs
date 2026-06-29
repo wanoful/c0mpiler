@@ -596,6 +596,26 @@ impl LoweringTarget for RV32Arch {
         RV32Inst::Bne { rs1, rs2, label }
     }
 
+    fn emit_branch_eq(rs1: Reg, rs2: Reg, label: BlockId) -> Self::MachineInst {
+        RV32Inst::Beq { rs1, rs2, label }
+    }
+
+    fn emit_branch_lt(rs1: Reg, rs2: Reg, label: BlockId) -> Self::MachineInst {
+        RV32Inst::Blt { rs1, rs2, label }
+    }
+
+    fn emit_branch_ge(rs1: Reg, rs2: Reg, label: BlockId) -> Self::MachineInst {
+        RV32Inst::Bge { rs1, rs2, label }
+    }
+
+    fn emit_branch_ltu(rs1: Reg, rs2: Reg, label: BlockId) -> Self::MachineInst {
+        RV32Inst::Bltu { rs1, rs2, label }
+    }
+
+    fn emit_branch_geu(rs1: Reg, rs2: Reg, label: BlockId) -> Self::MachineInst {
+        RV32Inst::Bgeu { rs1, rs2, label }
+    }
+
     fn emit_jump(label: BlockId) -> Self::MachineInst {
         RV32Inst::Jal {
             rd: Register::Physical(RV32Reg::Zero),

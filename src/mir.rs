@@ -324,6 +324,46 @@ pub trait LoweringTarget: TargetArch + Default {
         rs2: Register<Self::PhysicalReg>,
         label: BlockId,
     ) -> Self::MachineInst;
+    fn emit_branch_eq(
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+        label: BlockId,
+    ) -> Self::MachineInst {
+        let _ = (rs1, rs2, label);
+        unimplemented!("target does not implement branch-eq lowering")
+    }
+    fn emit_branch_lt(
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+        label: BlockId,
+    ) -> Self::MachineInst {
+        let _ = (rs1, rs2, label);
+        unimplemented!("target does not implement branch-lt lowering")
+    }
+    fn emit_branch_ge(
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+        label: BlockId,
+    ) -> Self::MachineInst {
+        let _ = (rs1, rs2, label);
+        unimplemented!("target does not implement branch-ge lowering")
+    }
+    fn emit_branch_ltu(
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+        label: BlockId,
+    ) -> Self::MachineInst {
+        let _ = (rs1, rs2, label);
+        unimplemented!("target does not implement branch-ltu lowering")
+    }
+    fn emit_branch_geu(
+        rs1: Register<Self::PhysicalReg>,
+        rs2: Register<Self::PhysicalReg>,
+        label: BlockId,
+    ) -> Self::MachineInst {
+        let _ = (rs1, rs2, label);
+        unimplemented!("target does not implement branch-geu lowering")
+    }
     fn emit_jump(label: BlockId) -> Self::MachineInst;
     fn emit_call(func: SymbolId, num_args: usize) -> Self::MachineInst;
     fn emit_ret() -> Self::MachineInst;
